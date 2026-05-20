@@ -1,0 +1,21 @@
+# LLM-Konfigurationen
+llm_configs:
+  chunk_llm:
+    base_url: "http://localhost:11434/v1"
+    api_key: ${CHUNK_LLM_API_KEY}
+    model_id: "qwen2.5:7b"
+  answer_llm:
+    base_url: "http://localhost:11434/v1"
+    api_key: ${ANSWER_LLM_API_KEY}
+    model_id: "frob/qwen3.5-instruct:4b"
+
+# Embedding-Konfiguration
+embedding_config:
+  model_id: "nomic-embed-text-v2-moe:latest"
+  base_url: "http://localhost:11434/v1"
+  api_key: ${EMBEDDING_API_KEY}
+
+# LanceDB-Konfiguration
+lancedb_config:
+  uri: "./lancedb"
+  table_name: "documents"

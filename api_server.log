@@ -1,0 +1,15 @@
+warning: The `tool.uv.dev-dependencies` field (used in `pyproject.toml`) is deprecated and will be removed in a future release; use `dependency-groups.dev` instead
+[92m21:48:16 - LiteLLM:WARNING[0m: common_utils.py:979 - litellm: could not pre-load bedrock-runtime response stream shape — Bedrock event-stream decoding will be unavailable. Error: No module named 'botocore'
+WARNING:LiteLLM:litellm: could not pre-load bedrock-runtime response stream shape — Bedrock event-stream decoding will be unavailable. Error: No module named 'botocore'
+[92m21:48:16 - LiteLLM:WARNING[0m: common_utils.py:24 - litellm: could not pre-load sagemaker-runtime response stream shape — SageMaker event-stream decoding will be unavailable. Error: No module named 'botocore'
+WARNING:LiteLLM:litellm: could not pre-load sagemaker-runtime response stream shape — SageMaker event-stream decoding will be unavailable. Error: No module named 'botocore'
+INFO:     Started server process [50623]
+INFO:     Waiting for application startup.
+INFO:src.api.app:Initialisiere API-Komponenten...
+INFO:src.api.app:DSPy erfolgreich konfiguriert
+INFO:src.api.app:API-Komponenten erfolgreich initialisiert
+INFO:     Application startup complete.
+INFO:     Uvicorn running on http://127.0.0.1:8000 (Press CTRL+C to quit)
+INFO:     127.0.0.1:50144 - "GET /health HTTP/1.1" 200 OK
+INFO:     127.0.0.1:50148 - "POST /process_document HTTP/1.1" 200 OK
+INFO:     127.0.0.1:50156 - "POST /ask HTTP/1.1" 200 OK
