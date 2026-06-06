@@ -1,176 +1,178 @@
+import logging
 import os
 import sys
-import logging
-from fastapi import FastAPI, HTTPException
-from pydantic import BaseModel
-from typing import List
+from contextlib import asynccontextmanager
 
-# Setup Logging
-logging.basicConfig(level=logging.INFO)
+# Füge das Projekt-Root zum Python-Pfad hinzu, damit `src.*`-Imports funktionieren,
+# unabhängig davon, von wo aus das Skript aufgerufen wird.
+_PROJECT_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
+if _PROJECT_ROOT not in sys.path:
+    sys.path.insert(0, _PROJECT_ROOT)
+
+from fastapi import FastAPI, HTTPException, status
+from pydantic import BaseModel, Field
+
+from src.bootstrap import Components, build
+
+logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
 logger = logging.getLogger(__name__)
 
-# Füge das src-Verzeichnis zum Python-Pfad hinzu
-sys.path.append(os.path.join(os.path.dirname(__file__), "..", ".."))
+# Limits für Eingabevalidierung
+MAX_DOCUMENT_TEXT_LENGTH = 1_000_000  # 1 MB Text pro Dokument
+MAX_QUESTION_LENGTH = 4_000
+MAX_DOCUMENT_ID_LENGTH = 256
+MAX_K = 20
 
-# Lade Umgebungsvariablen
-from dotenv import load_dotenv
-load_dotenv()
 
-# Importiere Komponenten nach Umgebungsvariablen-Loading
-try:
-    from src.config.config_manager import ConfigManager
-    from src.components.llm_manager import LLMManager
-    from src.components.embedding_manager import EmbeddingManager
-    from src.components.lancedb_manager import LanceDBManager
-    from src.components.chunker import SemanticChunker
-    from src.components.document_processor import DocumentProcessor
-    from src.components.hyde_rag import HyDERAG
-    import dspy
-    IMPORT_SUCCESS = True
-except ImportError as e:
-    logger.error(f"Import-Fehler: {e}")
-    IMPORT_SUCCESS = False
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    """Initialisiert und teardown der Komponenten."""
+    logger.info("Initialisiere API-Komponenten ...")
+    try:
+        comps = build()
+    except Exception as e:
+        logger.error("API-Initialisierung fehlgeschlagen: %s", e)
+        app.state.components = None
+        yield
+        return
+    if not comps.initialised:
+        logger.error("Komponenten unvollständig initialisiert.")
+        app.state.components = None
+        yield
+        return
+    app.state.components = comps
+    logger.info("API-Komponenten erfolgreich initialisiert.")
+    try:
+        yield
+    finally:
+        logger.info("API wird heruntergefahren.")
 
-app = FastAPI(title="HyDE-RAG API", description="API für das HyDE-RAG System")
 
-# Globale Variablen für die Komponenten
-components = {
-    'config_manager': None,
-    'chunk_llm_manager': None,
-    'answer_llm_manager': None,
-    'embedding_manager': None,
-    'db_manager': None,
-    'chunker': None,
-    'document_processor': None,
-    'hyde_rag': None
-}
+app = FastAPI(
+    title="HyDE-RAG API",
+    description="API für das HyDE-RAG System",
+    lifespan=lifespan,
+)
+
+
+def _get_components() -> Components:
+    """Liefert die initialisierten Komponenten oder 503, falls die Initialisierung fehlschlug."""
+    comps: Components | None = getattr(app.state, "components", None)
+    if comps is None:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="API nicht initialisiert (siehe Server-Logs)",
+        )
+    return comps
+
 
 class Document(BaseModel):
-    id: str
-    text: str
+    id: str = Field(..., min_length=1, max_length=MAX_DOCUMENT_ID_LENGTH, description="Eindeutige Dokument-ID")
+    text: str = Field(..., min_length=1, max_length=MAX_DOCUMENT_TEXT_LENGTH, description="Dokumenttext (max. 1 MB)")
+
+
+class ProcessedDocument(BaseModel):
+    document_id: str
+    chunks: int
+
 
 class Question(BaseModel):
-    question: str
+    question: str = Field(..., min_length=1, max_length=MAX_QUESTION_LENGTH)
+    document_id: str | None = Field(
+        default=None,
+        max_length=MAX_DOCUMENT_ID_LENGTH,
+        description="Optional: Suche auf ein bestimmtes Dokument einschränken",
+    )
+    k: int = Field(default=3, ge=1, le=MAX_K, description="Anzahl der abgerufenen Kontexte")
+
 
 class Answer(BaseModel):
     answer: str
     context: str
 
-@app.on_event("startup")
-async def startup_event():
-    global components
-    if not IMPORT_SUCCESS:
-        logger.error("API konnte nicht gestartet werden wegen fehlender Abhängigkeiten")
-        return
-    
-    try:
-        logger.info("Initialisiere API-Komponenten...")
-        
-        # Initialisiere Konfigurationsmanager
-        components['config_manager'] = ConfigManager()
-        
-        # Hole Konfigurationen
-        chunk_llm_config = components['config_manager'].get_llm_config("chunk_llm")
-        answer_llm_config = components['config_manager'].get_llm_config("answer_llm")
-        embedding_config = components['config_manager'].get_embedding_config()
-        lancedb_config = components['config_manager'].get_lancedb_config()
-        
-        # Initialisiere Komponenten
-        components['chunk_llm_manager'] = LLMManager(
-            base_url=chunk_llm_config["base_url"],
-            api_key=chunk_llm_config["api_key"],
-            model_id=chunk_llm_config["model_id"]
-        )
-        
-        components['answer_llm_manager'] = LLMManager(
-            base_url=answer_llm_config["base_url"],
-            api_key=answer_llm_config["api_key"],
-            model_id=answer_llm_config["model_id"]
-        )
-        
-        components['embedding_manager'] = EmbeddingManager(
-            base_url=embedding_config["base_url"],
-            api_key=embedding_config["api_key"],
-            model_id=embedding_config["model_id"]
-        )
-        
-        components['db_manager'] = LanceDBManager(
-            uri=lancedb_config["uri"],
-            table_name=lancedb_config["table_name"]
-        )
-        
-        # Initialisiere DSPy mit dem Antwort-LLM
-        try:
-            answer_lm = dspy.LM(
-                model=answer_llm_config["model_id"],
-                api_key=answer_llm_config["api_key"],
-                base_url=answer_llm_config["base_url"]
-            )
-            dspy.configure(lm=answer_lm)
-            logger.info("DSPy erfolgreich konfiguriert")
-        except Exception as e:
-            logger.warning(f"DSPy-Konfiguration fehlgeschlagen, verwende Mock: {e}")
-            answer_lm = dspy.LM(model="mock")
-            dspy.configure(lm=answer_lm)
-        
-        # Initialisiere Chunker und DocumentProcessor
-        components['chunker'] = SemanticChunker(components['chunk_llm_manager'])
-        components['document_processor'] = DocumentProcessor(
-            components['chunker'], 
-            components['embedding_manager'], 
-            components['db_manager']
-        )
-        
-        # Initialisiere HyDE-RAG
-        components['hyde_rag'] = HyDERAG(
-            components['db_manager'], 
-            components['embedding_manager']
-        )
-        
-        logger.info("API-Komponenten erfolgreich initialisiert")
-    except Exception as e:
-        logger.error(f"Fehler bei der API-Initialisierung: {e}")
-        # Setze alle Komponenten auf None bei Fehler
-        for key in components:
-            components[key] = None
 
-@app.post("/process_document", response_model=List[dict])
+class DocumentSummary(BaseModel):
+    document_id: str
+    chunk_count: int
+    first_chunk_index: int
+    last_chunk_index: int
+
+
+@app.post("/process_document", response_model=ProcessedDocument)
 async def process_document(document: Document):
     """
     Verarbeitet ein Dokument durch Chunking, Vektorisierung und speichert es in der Datenbank.
     """
-    if components['document_processor'] is None:
-        raise HTTPException(status_code=500, detail="Dokumentenprozessor nicht initialisiert")
-    
+    comps = _get_components()
     try:
-        processed_chunks = components['document_processor'].process_document(document.id, document.text)
-        return processed_chunks
+        chunks = comps.document_processor.process_document(document.id, document.text)
+        return ProcessedDocument(document_id=document.id, chunks=len(chunks))
     except Exception as e:
-        logger.error(f"Fehler bei der Dokumentenverarbeitung: {e}")
-        raise HTTPException(status_code=500, detail=f"Fehler bei der Dokumentenverarbeitung: {str(e)}")
+        logger.exception("Fehler bei der Dokumentenverarbeitung")
+        raise HTTPException(status_code=500, detail=f"Fehler bei der Dokumentenverarbeitung: {e}")
+
 
 @app.post("/ask", response_model=Answer)
 async def ask_question(question: Question):
     """
     Beantwortet eine Frage basierend auf den in der Datenbank gespeicherten Dokumenten.
     """
-    if components['hyde_rag'] is None:
-        raise HTTPException(status_code=500, detail="HyDE-RAG nicht initialisiert")
-    
+    comps = _get_components()
     try:
-        result = components['hyde_rag'](question.question)
+        result = comps.hyde_rag(
+            question.question, document_id=question.document_id, k=question.k
+        )
         return Answer(answer=result.answer, context=result.context)
+    except RuntimeError as e:
+        logger.exception("Fragebeantwortung fehlgeschlagen")
+        raise HTTPException(status_code=502, detail=f"Fragebeantwortung fehlgeschlagen: {e}")
     except Exception as e:
-        logger.error(f"Fehler bei der Fragebeantwortung: {e}")
-        raise HTTPException(status_code=500, detail=f"Fehler bei der Fragebeantwortung: {str(e)}")
+        logger.exception("Unerwarteter Fehler bei der Fragebeantwortung")
+        raise HTTPException(status_code=500, detail=f"Fehler bei der Fragebeantwortung: {e}")
+
+
+@app.get("/documents", response_model=list[DocumentSummary])
+async def list_documents():
+    """
+    Liefert eine Übersicht aller indizierten Dokumente.
+    """
+    comps = _get_components()
+    try:
+        return comps.db_manager.list_documents()
+    except Exception as e:
+        logger.exception("Fehler beim Auflisten der Dokumente")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.delete("/documents/{document_id}")
+async def delete_document(document_id: str):
+    """
+    Entfernt alle Chunks eines Dokuments aus der Datenbank.
+    """
+    if len(document_id) > MAX_DOCUMENT_ID_LENGTH:
+        raise HTTPException(status_code=400, detail="document_id zu lang")
+    comps = _get_components()
+    try:
+        removed = comps.db_manager.delete_document(document_id)
+    except Exception as e:
+        logger.exception("Fehler beim Löschen des Dokuments")
+        raise HTTPException(status_code=500, detail=str(e))
+    return {"document_id": document_id, "removed": removed}
+
 
 @app.get("/health")
 async def health_check():
     """
     Prüft den Status der API.
     """
-    return {"status": "healthy"}
+    comps = getattr(app.state, "components", None)
+    return {
+        "status": "healthy" if comps is not None else "degraded",
+        "components_initialised": comps is not None,
+    }
+
 
 if __name__ == "__main__":
     import uvicorn
+
     uvicorn.run(app, host="127.0.0.1", port=8000)

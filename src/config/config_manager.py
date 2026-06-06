@@ -2,33 +2,23 @@ import yaml
 import os
 from typing import Dict, Any
 
+
 class ConfigManager:
     def __init__(self, config_path: str = "src/config/settings.yaml"):
         """
-        Initialisiert den Konfigurationsmanager.
-        
-        :param config_path: Pfad zur YAML-Konfigurationsdatei
+        Initialises the configuration manager.
+
+        :param config_path: Path to the YAML configuration file
         """
-        # Lade Umgebungsvariablen
-        self._load_env_vars()
-        
         with open(config_path, 'r') as file:
             self.config = yaml.safe_load(file)
-        
-        # Ersetze Umgebungsvariablen in der Konfiguration
+
         self._replace_env_vars()
-    
-    def _load_env_vars(self):
-        """
-        Lädt Umgebungsvariablen aus der .env-Datei, falls vorhanden.
-        """
-        # Normalerweise werden Umgebungsvariablen bereits durch dotenv geladen,
-        # aber wir stellen sicher, dass sie geladen sind
-        pass
-    
+
     def _replace_env_vars(self):
         """
-        Ersetzt Umgebungsvariablen in der Konfiguration.
+        Replaces ${ENV_VAR} placeholders in the configuration with values from os.environ.
+        Missing env vars are left as the literal placeholder string.
         """
         def replace_in_dict(d):
             for key, value in d.items():
@@ -37,30 +27,39 @@ class ConfigManager:
                 elif isinstance(value, str) and value.startswith("${") and value.endswith("}"):
                     env_var_name = value[2:-1]
                     d[key] = os.getenv(env_var_name, value)
-        
+
         replace_in_dict(self.config)
-    
+
     def get_llm_config(self, llm_type: str) -> Dict[str, Any]:
         """
-        Gibt die Konfiguration für einen bestimmten LLM-Typ zurück.
-        
-        :param llm_type: Typ des LLMs (z.B. 'chunk_llm', 'answer_llm')
-        :return: Konfigurationsdictionary für den angegebenen LLM-Typ
+        Returns the configuration for a given LLM type.
+
+        :param llm_type: Type of LLM (e.g. 'chunk_llm', 'answer_llm')
+        :return: Configuration dictionary for the given LLM type
         """
         return self.config['llm_configs'][llm_type]
-    
+
     def get_embedding_config(self) -> Dict[str, Any]:
         """
-        Gibt die Konfiguration für das Embedding-Model zurück.
-        
-        :return: Konfigurationsdictionary für das Embedding-Model
+        Returns the configuration for the embedding model.
+
+        :return: Configuration dictionary for the embedding model
         """
         return self.config['embedding_config']
-    
+
     def get_lancedb_config(self) -> Dict[str, Any]:
         """
-        Gibt die Konfiguration für LanceDB zurück.
-        
-        :return: Konfigurationsdictionary für LanceDB
+        Returns the configuration for LanceDB.
+
+        :return: Configuration dictionary for LanceDB
         """
         return self.config['lancedb_config']
+
+    def get_settings(self) -> Dict[str, Any]:
+        """
+        Returns the general settings block (chunk_size, etc.).
+
+        :return: Dictionary with general settings; defaults to {'chunk_size': 1000}
+            when the block is absent.
+        """
+        return self.config.get('settings', {'chunk_size': 1000})
