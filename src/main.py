@@ -1,17 +1,12 @@
 import sys
-import os
 import logging
 from dotenv import load_dotenv
 
-# Add the project root to sys.path so that `src.*` imports work regardless of
-# where the script is invoked from.
-_PROJECT_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
-if _PROJECT_ROOT not in sys.path:
-    sys.path.insert(0, _PROJECT_ROOT)
-
 from src.bootstrap import build  # noqa: E402
 
-logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
+logging.basicConfig(
+    level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s"
+)
 logger = logging.getLogger(__name__)
 
 
@@ -42,7 +37,9 @@ def main() -> int:
     """
 
     logger.info("Processing document ...")
-    processed_chunks = components.document_processor.process_document("sample_doc_1", sample_document)
+    processed_chunks = components.document_processor.process_document(
+        "sample_doc_1", sample_document
+    )
     logger.info("Document processed. %d chunks created.", len(processed_chunks))
 
     question = "How does HyDE work with DSPy?"

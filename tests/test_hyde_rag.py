@@ -2,6 +2,7 @@
 
 Verifies that document_id and k are correctly forwarded to db_manager.search.
 """
+
 from unittest.mock import MagicMock
 
 import pandas as pd
@@ -33,9 +34,7 @@ def test_forward_passes_document_id_and_k_to_search(mock_db, mock_embedding):
     result = rag("Question?", document_id="d1", k=2)
 
     mock_embedding.get_embeddings.assert_called_once_with(["hypo"])
-    mock_db.search.assert_called_once_with(
-        [0.0] * 4, limit=2, document_id="d1"
-    )
+    mock_db.search.assert_called_once_with([0.0] * 4, limit=2, document_id="d1")
     assert "alpha" in result.context
     assert "beta" in result.context
     assert result.answer == "the answer"
@@ -64,9 +63,7 @@ def test_forward_empty_search_returns_message(mock_db, mock_embedding):
 
 
 def test_forward_deduplicates_contexts(mock_db, mock_embedding):
-    mock_db.search.return_value = pd.DataFrame(
-        {"text": ["a", "b", "a", "b", "c"]}
-    )
+    mock_db.search.return_value = pd.DataFrame({"text": ["a", "b", "a", "b", "c"]})
     rag = HyDERAG(db_manager=mock_db, embedding_manager=mock_embedding)
     rag.generate_hyde = MagicMock(return_value=MagicMock(hypothetical_document="h"))
     rag.final_rag = MagicMock(return_value=MagicMock(answer="x"))

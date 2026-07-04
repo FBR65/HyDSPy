@@ -89,7 +89,9 @@ class SemanticChunker:
         "TEXT:\n{text}"
     )
 
-    def __init__(self, llm_manager: Optional[LLMManager] = None, chunk_size: int = 1000):
+    def __init__(
+        self, llm_manager: Optional[LLMManager] = None, chunk_size: int = 1000
+    ):
         """
         :param llm_manager: LLMManager for topic-based segmentation. When None,
             text is split deterministically (paragraphs, sentences, words).
@@ -140,7 +142,9 @@ class SemanticChunker:
         """Parses the LLM response as JSON. Raises ValueError on bad shape."""
         cleaned = raw.strip()
         if cleaned.startswith("```"):
-            cleaned = re.sub(r"^```(?:json)?\s*|\s*```$", "", cleaned, flags=re.IGNORECASE)
+            cleaned = re.sub(
+                r"^```(?:json)?\s*|\s*```$", "", cleaned, flags=re.IGNORECASE
+            )
         try:
             data = json.loads(cleaned)
         except json.JSONDecodeError as e:

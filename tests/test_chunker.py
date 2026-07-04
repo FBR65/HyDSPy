@@ -1,9 +1,9 @@
 """Tests for src.components.chunker.SemanticChunker."""
+
 import pytest
 
 from src.components.chunker import SemanticChunker, _split_by_size, _split_words
 from tests.conftest import FakeLLM, ExplodingLLM
-
 
 # --- deterministic mode (without LLM) ---
 

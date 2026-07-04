@@ -1,4 +1,5 @@
 """Tests for src.components.embedding_manager.EmbeddingManager."""
+
 import pytest
 from openai import APIConnectionError, OpenAIError
 

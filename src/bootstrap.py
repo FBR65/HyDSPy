@@ -13,6 +13,8 @@ from src.components.embedding_manager import EmbeddingManager
 from src.components.hyde_rag import HyDERAG
 from src.components.lancedb_manager import LanceDBManager
 from src.components.llm_manager import LLMManager
+from src.components.bm25_manager import BM25Manager
+from src.components.agentic_rag import AgenticRAG
 
 logger = logging.getLogger(__name__)
 
@@ -27,9 +29,20 @@ class Components:
     chunker: SemanticChunker
     document_processor: DocumentProcessor
     hyde_rag: HyDERAG
+    bm25_manager: BM25Manager
+    agentic_rag: AgenticRAG
 
     @property
     def initialised(self) -> bool:
+        """Best-effort None-check over all component fields.
+
+        Note: ``build()`` is fail-loud — it raises on any initialisation
+        failure rather than returning a partially-populated ``Components``.
+        Therefore this property is effectively always ``True`` for an instance
+        returned by ``build()``. It exists as a defensive guard for callers
+        that construct ``Components`` manually (e.g. tests) and want to assert
+        completeness without catching exceptions.
+        """
         return all(
             getattr(self, field) is not None
             for field in (
@@ -41,6 +54,8 @@ class Components:
                 "chunker",
                 "document_processor",
                 "hyde_rag",
+                "bm25_manager",
+                "agentic_rag",
             )
         )
 
@@ -65,6 +80,22 @@ def _resolve_config_path(explicit: Optional[str] = None) -> str:
     )
 
 
+def _resolve_cache_path(cache_path: Optional[str]) -> Optional[str]:
+    """Resolves a relative BM25 cache path to an absolute one.
+
+    Paths from ``settings.yaml`` are typically relative (e.g.
+    ``./lancedb/bm25_cache.pkl``). Resolving them against the project root
+    makes the cache location independent of the API server's working directory.
+    Absolute paths and ``None`` are returned unchanged.
+    """
+    if not cache_path:
+        return cache_path
+    if os.path.isabs(cache_path):
+        return cache_path
+    project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    return os.path.normpath(os.path.join(project_root, cache_path))
+
+
 def build(config_path: Optional[str] = None, load_env: bool = True) -> Components:
     """
     Initialises the full component chain.
@@ -80,6 +111,16 @@ def build(config_path: Optional[str] = None, load_env: bool = True) -> Component
     config_manager = ConfigManager(config_path=_resolve_config_path(config_path))
     settings = config_manager.get_settings()
     chunk_size = int(settings.get("chunk_size", 1000))
+    multi_query = bool(settings.get("multi_query", True))
+    num_queries = int(settings.get("num_queries", 5))
+    bm25_hybrid = bool(settings.get("bm25_hybrid", True))
+    expansion_weight = float(settings.get("expansion_weight", 0.5))
+    df_threshold = float(settings.get("df_threshold", 0.1))
+    max_calls = int(settings.get("max_calls", 15))
+    token_threshold = int(settings.get("token_threshold", 115_200))
+    search_limit = int(settings.get("search_limit", 10))
+    max_queries_per_call = int(settings.get("max_queries_per_call", 5))
+    open_window = int(settings.get("open_window", 5))
 
     chunk_llm_config = config_manager.get_llm_config("chunk_llm")
     answer_llm_config = config_manager.get_llm_config("answer_llm")
@@ -107,6 +148,10 @@ def build(config_path: Optional[str] = None, load_env: bool = True) -> Component
     db_manager = LanceDBManager(
         uri=lancedb_config["uri"],
         table_name=lancedb_config["table_name"],
+        index_type=lancedb_config.get("index_type", "IVF_PQ"),
+        num_partitions=lancedb_config.get("num_partitions"),
+        num_sub_vectors=lancedb_config.get("num_sub_vectors"),
+        index_train_threshold=int(lancedb_config.get("index_train_threshold", 256)),
     )
 
     # DSPy configuration. We fail loud if the LLM configuration is invalid.
@@ -120,7 +165,31 @@ def build(config_path: Optional[str] = None, load_env: bool = True) -> Component
 
     chunker = SemanticChunker(chunk_llm_manager, chunk_size=chunk_size)
     document_processor = DocumentProcessor(chunker, embedding_manager, db_manager)
-    hyde_rag = HyDERAG(db_manager, embedding_manager)
+
+    bm25_manager = BM25Manager(
+        db_manager=db_manager,
+        expansion_weight=expansion_weight,
+        df_threshold=df_threshold,
+        cache_path=_resolve_cache_path(lancedb_config.get("bm25_cache_path")),
+    )
+    hyde_rag = HyDERAG(
+        db_manager=db_manager,
+        embedding_manager=embedding_manager,
+        bm25_manager=bm25_manager,
+        multi_query=multi_query,
+        num_queries=num_queries,
+        bm25_hybrid=bm25_hybrid,
+    )
+    agentic_rag = AgenticRAG(
+        db_manager=db_manager,
+        embedding_manager=embedding_manager,
+        bm25_manager=bm25_manager,
+        max_calls=max_calls,
+        token_threshold=token_threshold,
+        search_limit=search_limit,
+        max_queries_per_call=max_queries_per_call,
+        open_window=open_window,
+    )
 
     return Components(
         config_manager=config_manager,
@@ -131,4 +200,6 @@ def build(config_path: Optional[str] = None, load_env: bool = True) -> Component
         chunker=chunker,
         document_processor=document_processor,
         hyde_rag=hyde_rag,
+        bm25_manager=bm25_manager,
+        agentic_rag=agentic_rag,
     )

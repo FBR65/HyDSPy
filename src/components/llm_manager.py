@@ -21,18 +21,23 @@ class LLMManager:
         """
         Generates a completion for a given prompt.
 
+        Implemented via the chat-completions endpoint (``chat.completions``)
+        rather than the legacy text-completions endpoint, because many
+        OpenAI-compatible servers (e.g. Ollama) do not support the legacy
+        ``/v1/completions`` route. The prompt is sent as a single user message.
+
         :param prompt: Input prompt
         :param max_tokens: Maximum number of tokens in the response
         :return: Generated completion
         :raises RuntimeError: If the LLM API fails
         """
         try:
-            response = self.client.completions.create(
+            response = self.client.chat.completions.create(
                 model=self.model_id,
-                prompt=prompt,
-                max_tokens=max_tokens
+                messages=[{"role": "user", "content": prompt}],
+                max_tokens=max_tokens,
             )
-            return response.choices[0].text.strip()
+            return (response.choices[0].message.content or "").strip()
         except Exception as e:
             raise RuntimeError(
                 f"LLM completion for model '{self.model_id}' failed: {e}"
@@ -49,9 +54,7 @@ class LLMManager:
         """
         try:
             response = self.client.chat.completions.create(
-                model=self.model_id,
-                messages=messages,
-                max_tokens=max_tokens
+                model=self.model_id, messages=messages, max_tokens=max_tokens
             )
             return response.choices[0].message.content.strip()
         except Exception as e:

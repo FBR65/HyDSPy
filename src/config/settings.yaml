@@ -16,6 +16,28 @@ embedding_config:
 lancedb_config:
   uri: "./lancedb"
   table_name: "documents"
+  # Vektor-Index-Tuning. index_type = null deaktiviert den Index-Build
+  # (sequentieller Scan, sinnvoll fuer kleine Korpora oder Tests).
+  index_type: "IVF_PQ"
+  num_partitions: null
+  num_sub_vectors: null
+  index_train_threshold: 256
+  # Persistenter BM25-Cache.
+  bm25_cache_path: "./lancedb/bm25_cache.pkl"
 
 settings:
   chunk_size: 1000
+  # Phase 1: Multi-Query-Reformulation + HyDE
+  multi_query: true
+  num_queries: 5
+  # Phase 2: SIRA BM25 Hybrid
+  bm25_hybrid: true
+  expansion_weight: 0.5
+  df_threshold: 0.1
+  # Phase 3: Agentic Loop
+  agentic_enabled: true
+  max_calls: 15
+  token_threshold: 115200
+  search_limit: 10
+  max_queries_per_call: 5
+  open_window: 5

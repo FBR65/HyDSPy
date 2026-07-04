@@ -3,6 +3,7 @@
 Es wird KEIN echter Ollama / keine echte LLM-API benoetigt. Die Komponenten
 werden mit Stub-Klassen (Fallback-LLMs, tempdir-LanceDB) ersetzt.
 """
+
 from __future__ import annotations
 
 import os
@@ -25,6 +26,8 @@ from src.components.document_processor import DocumentProcessor
 from src.components.embedding_manager import EmbeddingManager
 from src.components.hyde_rag import HyDERAG
 from src.components.lancedb_manager import LanceDBManager
+from src.components.bm25_manager import BM25Manager
+from src.components.agentic_rag import AgenticRAG
 from src.config.config_manager import ConfigManager
 
 
@@ -64,15 +67,19 @@ def stub_components(tmp_path, monkeypatch) -> Components:
     so the LanceDB search path produces reproducible results.
     """
     cfg = ConfigManager()
+    db_manager = LanceDBManager(uri=str(tmp_path), table_name="docs")
+    bm25_manager = BM25Manager(db_manager=db_manager)
     comps = Components(
         config_manager=cfg,
         chunk_llm_manager=None,
         answer_llm_manager=None,
         embedding_manager=EmbeddingManager("http://localhost:1", "k", "fake"),
-        db_manager=LanceDBManager(uri=str(tmp_path), table_name="docs"),
+        db_manager=db_manager,
         chunker=SemanticChunker(llm_manager=None, chunk_size=500),
         document_processor=None,
         hyde_rag=None,
+        bm25_manager=bm25_manager,
+        agentic_rag=None,
     )
     # Replace the embedding client with a deterministic stub.
     monkeypatch.setattr(comps.embedding_manager, "client", _StubClient(dim=8))
@@ -80,14 +87,24 @@ def stub_components(tmp_path, monkeypatch) -> Components:
     comps.document_processor = DocumentProcessor(
         comps.chunker, comps.embedding_manager, comps.db_manager
     )
-    comps.hyde_rag = HyDERAG(comps.db_manager, comps.embedding_manager)
+    comps.hyde_rag = HyDERAG(
+        comps.db_manager, comps.embedding_manager, bm25_manager=bm25_manager
+    )
+    comps.agentic_rag = AgenticRAG(
+        comps.db_manager, comps.embedding_manager, bm25_manager=bm25_manager
+    )
     # Stub the DSPy sub-modules so /ask returns a deterministic answer without
     # requiring a configured LM.
     comps.hyde_rag.generate_hyde = MagicMock(
         return_value=MagicMock(hypothetical_document="hypo")
     )
-    comps.hyde_rag.final_rag = MagicMock(
-        return_value=MagicMock(answer="stub answer")
+    comps.hyde_rag.generate_queries = MagicMock(return_value=MagicMock(queries=""))
+    comps.hyde_rag.predict_terms = MagicMock(return_value=MagicMock(terms=""))
+    comps.hyde_rag.final_rag = MagicMock(return_value=MagicMock(answer="stub answer"))
+    # Stub the agentic pipeline so /ask?mode=agentic returns a deterministic
+    # answer without running the real agentic loop.
+    comps.agentic_rag = MagicMock(
+        return_value=MagicMock(answer="agentic answer", context="agentic ctx")
     )
     return comps
 
@@ -95,6 +112,7 @@ def stub_components(tmp_path, monkeypatch) -> Components:
 @pytest.fixture
 def client(stub_components) -> TestClient:
     """TestClient with stub components via lifespan override."""
+
     @asynccontextmanager
     async def stub_lifespan(app):
         app.state.components = stub_components
@@ -178,10 +196,10 @@ def test_endpoints_return_503_when_uninitialised(broken_client, method, url, jso
 @pytest.mark.parametrize(
     "payload",
     [
-        {"question": ""},                              # leere question
-        {"question": "x", "k": 0},                     # k zu klein
-        {"question": "x", "k": 999},                   # k zu gross
-        {"question": "x", "document_id": "a" * 300},   # document_id zu lang
+        {"question": ""},  # leere question
+        {"question": "x", "k": 0},  # k zu klein
+        {"question": "x", "k": 999},  # k zu gross
+        {"question": "x", "document_id": "a" * 300},  # document_id zu lang
     ],
 )
 def test_ask_validation_422(client, payload):
@@ -192,10 +210,10 @@ def test_ask_validation_422(client, payload):
 @pytest.mark.parametrize(
     "payload",
     [
-        {"id": "", "text": "x"},                       # leere id
-        {"id": "abc"},                                # text fehlt
-        {"id": "a" * 300, "text": "x"},               # id zu lang
-        {"id": "x", "text": ""},                      # leerer text
+        {"id": "", "text": "x"},  # leere id
+        {"id": "abc"},  # text fehlt
+        {"id": "a" * 300, "text": "x"},  # id zu lang
+        {"id": "x", "text": ""},  # leerer text
     ],
 )
 def test_process_document_validation_422(client, payload):
@@ -279,3 +297,41 @@ def test_delete_document_id_too_long(client):
 def test_ask_too_long_question_422(client):
     r = client.post("/ask", json={"question": "x" * 5000})
     assert r.status_code == 422
+
+
+# --- mode-Umschalter (HyDE vs. Agentic) ---
+
+
+def test_ask_default_mode_is_hyde(client):
+    client.post("/process_document", json={"id": "d", "text": "irgendwas"})
+    r = client.post("/ask", json={"question": "?"})
+    assert r.status_code == 200
+    body = r.json()
+    assert body["answer"] == "stub answer"
+
+
+def test_ask_explicit_hyde_mode(client):
+    client.post("/process_document", json={"id": "d", "text": "irgendwas"})
+    r = client.post("/ask", json={"question": "?", "mode": "hyde"})
+    assert r.status_code == 200
+    assert r.json()["answer"] == "stub answer"
+
+
+def test_ask_agentic_mode(client):
+    client.post("/process_document", json={"id": "d", "text": "irgendwas"})
+    r = client.post("/ask", json={"question": "?", "mode": "agentic"})
+    assert r.status_code == 200, r.text
+    body = r.json()
+    assert body["answer"] == "agentic answer"
+    assert body["context"] == "agentic ctx"
+
+
+def test_ask_unknown_mode_returns_422(client):
+    r = client.post("/ask", json={"question": "?", "mode": "bogus"})
+    assert r.status_code == 422
+    assert "bogus" in r.json()["detail"]
+
+
+def test_ask_agentic_mode_when_not_initialised(broken_client):
+    r = broken_client.post("/ask", json={"question": "?", "mode": "agentic"})
+    assert r.status_code == 503

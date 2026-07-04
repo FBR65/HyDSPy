@@ -4,23 +4,20 @@ These fixtures are intentionally minimal: no network, no real LLMs.
 External services (Ollama, embedding APIs) are replaced by stub clients
 that the tests inject via monkeypatch.
 """
+
 from __future__ import annotations
 
 import os
-import sys
 import tempfile
-from contextlib import asynccontextmanager
 from typing import Iterator
 
 import pytest
 
-
-# Stelle sicher, dass `src.*` Importe funktionieren, auch wenn pytest
-# nicht via `uv` gestartet wurde.
+# Project root and src directory are used to locate on-disk fixtures such as
+# the real settings.yaml. `src.*` imports work without a sys.path hack because
+# the package is installed in editable mode (see pyproject.toml).
 _PROJECT_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
 _SRC = os.path.join(_PROJECT_ROOT, "src")
-if _SRC not in sys.path:
-    sys.path.insert(0, _SRC)
 
 
 @pytest.fixture

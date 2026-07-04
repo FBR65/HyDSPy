@@ -41,3 +41,9 @@ Thumbs.db
 lancedb/
 .env
 .pytest_cache/
+
+# Logs
+*.log
+
+# LanceDB in-memory test artifact (created when uri=":memory:" is used)
+:memory:/

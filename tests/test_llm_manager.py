@@ -1,4 +1,5 @@
 """Tests for src.components.llm_manager.LLMManager."""
+
 import pytest
 from openai import APIConnectionError
 
@@ -81,13 +82,16 @@ def test_generate_completion_raises_on_api_error(monkeypatch):
 
 
 def test_generate_completion_returns_stripped_text(monkeypatch):
-    fake = _FakeClient(completion_text="  hello world  ")
+    # generate_completion now uses the chat-completions endpoint, so the
+    # response content comes back via the chat path.
+    fake = _FakeClient(chat_content="  hello world  ")
     lm = LLMManager("http://x", "k", "m")
     monkeypatch.setattr(lm, "client", fake)
     assert lm.generate_completion("hi") == "hello world"
-    assert fake.completion_calls[0]["model"] == "m"
-    assert fake.completion_calls[0]["prompt"] == "hi"
-    assert fake.completion_calls[0]["max_tokens"] == 500
+    # The prompt is sent as a single user message.
+    assert fake.chat_calls[0]["model"] == "m"
+    assert fake.chat_calls[0]["messages"] == [{"role": "user", "content": "hi"}]
+    assert fake.chat_calls[0]["max_tokens"] == 500
 
 
 def test_generate_chat_raises_on_api_error(monkeypatch):
@@ -108,8 +112,8 @@ def test_generate_chat_returns_stripped_content(monkeypatch):
 
 
 def test_generate_completion_custom_max_tokens(monkeypatch):
-    fake = _FakeClient(completion_text="x")
+    fake = _FakeClient(chat_content="x")
     lm = LLMManager("http://x", "k", "m")
     monkeypatch.setattr(lm, "client", fake)
     lm.generate_completion("hi", max_tokens=100)
-    assert fake.completion_calls[0]["max_tokens"] == 100
+    assert fake.chat_calls[0]["max_tokens"] == 100

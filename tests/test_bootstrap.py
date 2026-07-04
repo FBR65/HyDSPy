@@ -1,4 +1,5 @@
 """Tests for src.bootstrap."""
+
 import os
 import sys
 
@@ -12,17 +13,20 @@ if _SRC not in sys.path:
 
 def test_resolve_config_path_explicit():
     from src.bootstrap import _resolve_config_path
+
     assert _resolve_config_path("/custom/path.yaml") == "/custom/path.yaml"
 
 
 def test_resolve_config_path_env(monkeypatch):
     from src.bootstrap import _resolve_config_path
+
     monkeypatch.setenv("HYDSPY_CONFIG", "/from/env.yaml")
     assert _resolve_config_path() == "/from/env.yaml"
 
 
 def test_resolve_config_path_default(monkeypatch, real_settings_path):
     from src.bootstrap import _resolve_config_path
+
     monkeypatch.delenv("HYDSPY_CONFIG", raising=False)
     assert _resolve_config_path() == real_settings_path
 
