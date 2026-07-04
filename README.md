@@ -16,7 +16,7 @@ This project implements a Retrieval-Augmented Generation (RAG) system that combi
 
 ## Requirements
 
-- Python >= 3.9
+- Python >= 3.10
 - [uv](https://github.com/astral-sh/uv) package manager
 - Optional: a running OpenAI-compatible API (e.g. Ollama at `http://localhost:11434/v1`)
 
@@ -25,10 +25,12 @@ This project implements a Retrieval-Augmented Generation (RAG) system that combi
 1. Clone the repository:
    ```bash
    git clone <repository-url>
-   cd HyDE_DSPy
+   cd HyDSPy
    ```
 
-2. Create a virtual environment and install dependencies:
+2. Create a virtual environment and install dependencies (this installs the
+   package in editable mode, so `src.*` imports work from any working
+   directory):
    ```bash
    uv sync
    ```
@@ -39,9 +41,13 @@ This project implements a Retrieval-Augmented Generation (RAG) system that combi
    # Edit .env and add your API keys
    ```
 
+   The `${VAR_NAME}` placeholders in `src/config/settings.yaml` are substituted
+   from the environment at load time; missing variables are left as the
+   literal placeholder string.
+
 ## Configuration
 
-Configuration lives in `src/config/settings.yaml`. You can set different LLMs, embedding models, and the database here. Environment variables are referenced via `${VAR_NAME}`.
+Configuration lives in `src/config/settings.yaml`. You can set different LLMs, embedding models, and the database here. Environment variables are referenced via `${VAR_NAME}` and are substituted anywhere inside a string value (e.g. `Bearer ${TOKEN}`).
 
 Options under `settings:`:
 
@@ -53,7 +59,7 @@ Options under `settings:`:
 | `bm25_hybrid` | `true` | Enables the SIRA BM25 hybrid branch. Term prediction, DF filtering and weighted BM25 are combined with the vector ranking via RRF. |
 | `expansion_weight` | `0.5` | Weight `w` in the weighted BM25 formula `BM25(q_orig) + w * BM25(q_exp)`. |
 | `df_threshold` | `0.1` | Max fraction of documents a predicted term may occur in to survive the DF filter (`0 < DF <= df_threshold * N`). |
-| `agentic_enabled` | `true` | Instantiates the `AgenticRAG` module at startup so the `agentic` retrieval mode is available via the API. |
+| `agentic_enabled` | `true` | Documented but currently not evaluated by `build()`; the `AgenticRAG` module is always instantiated at startup. The `agentic` retrieval mode is therefore always available via the API. |
 | `max_calls` | `15` | Maximum number of iterations in the agentic loop before a final answer is forced. |
 | `token_threshold` | `115200` | Token estimate (90% of 128k) at which the agentic loop forces a `summarize` call to compress the evidence trail. The token budget may be exceeded; the threshold only triggers summarisation. |
 | `search_limit` | `10` | Maximum number of results returned per query inside the agentic `search` tool. |
@@ -74,11 +80,17 @@ The `lancedb_config` block controls vector-index tuning and BM25 cache persisten
 
 ### Command line
 
-Run the main application (processes a demo document and asks a sample question):
+Run the main application (processes a demo document and asks a sample question).
+The package installs a `hydspy` console script, so either form works:
 
 ```bash
+uv run hydspy
+# equivalent to:
 uv run python src/main.py
 ```
+
+The CLI exits with code `0` on success and `1` if component initialisation
+fails.
 
 ### API
 
@@ -148,11 +160,15 @@ curl "http://localhost:8000/health"
 Input limits (Pydantic validation):
 
 - `Document.text`: max. 1,000,000 characters
-- `Document.id`: 1-256 characters
+- `Document.id`: 1-256 characters, allowed: `A-Za-z0-9` and `_ - : . /`
 - `Question.question`: 1-4,000 characters
 - `Question.k`: 1-20 (default 3)
-- `Question.document_id`: optional, max. 256 characters
+- `Question.document_id`: optional, max. 256 characters, same charset as `Document.id`
 - `Question.mode`: `hyde` or `agentic` (default `hyde`)
+
+The `document_id` charset is restricted because the value is interpolated into
+LanceDB SQL-style filters (single quotes are escaped server-side as a second
+line of defence).
 
 ## Architecture
 
@@ -257,7 +273,12 @@ Implements the query-compilation approach from "Before Another RAG Hop, Try Comp
 3. **Weighted BM25**: The combined score is `BM25(q_orig) + 0.5 * BM25(q_exp)`, where `q_orig` is the raw question and `q_exp` is the filtered expansion terms.
 4. **RRF fusion**: The BM25 ranking and the vector ranking are fused via Reciprocal Rank Fusion (`k = 60`).
 
-The BM25 index is built in memory from the LanceDB chunk texts and rebuilt lazily when the underlying table changes (detected via row count).
+The BM25 index is built in memory from the LanceDB chunk texts and rebuilt
+lazily when the underlying table changes (detected via row count). The
+document-id column is cached at build time so `document_id`-filtered searches
+do not reload the whole table on every call. The on-disk cache path is
+resolved relative to the project root, so it is stable regardless of the
+server's working directory.
 
 ### Agentic RAG Loop (agentic mode)
 
@@ -275,39 +296,49 @@ Loop control:
 - Iterates up to `max_calls` (default 15) times.
 - Terminates when the LLM produces a final answer without a tool call.
 - A forced final answer is produced when `max_calls` is reached.
-- Reference ids (`turnNsearchM`) allow `find` and `open` to reuse earlier results without re-querying.
-- When the token estimate reaches `token_threshold`, a `summarize` call is forced to compress the evidence trail. The token budget is not a hard cap.
+- Reference ids (`turnNsearchM`) allow `find` and `open` to reuse earlier
+  results without re-querying. The counter `M` resets to 1 each turn, so the
+  first search result of every turn is `turnNsearch1`.
+- The `k` parameter of `/ask` constrains the number of results returned per
+  `search` tool call (default 3); `search_limit` is the fallback when `k` is
+  not provided.
+- When the token estimate reaches `token_threshold`, a `summarize` call is
+  forced to compress the evidence trail. The token budget is not a hard cap.
 
 ## Project structure
 
 ```
 HyDSPy/
 ├── src/
+│   ├── __init__.py
 │   ├── bootstrap.py              # Central component initialisation
-│   ├── main.py                   # CLI demo
+│   ├── main.py                   # CLI demo (entry point of the `hydspy` script)
 │   ├── api/
 │   │   └── app.py                # FastAPI application (lifespan, endpoints, mode switch)
 │   ├── components/
+│   │   ├── __init__.py
 │   │   ├── agentic_rag.py        # Iterative Agentic RAG loop (dspy.Module)
 │   │   ├── bm25_manager.py       # SIRA BM25 index, DF filter, weighted scoring
 │   │   ├── chunker.py            # LLM-based SemanticChunker
 │   │   ├── document_processor.py # Chunking + embedding + storage
-│   │   ├── embedding_manager.py  # OpenAI-compatible embeddings
+│   │   ├── embedding_manager.py  # OpenAI-compatible embeddings (batched)
 │   │   ├── hyde_rag.py           # HyDE + Multi-Query + BM25 hybrid (dspy.Module)
-│   │   ├── lancedb_manager.py    # Vector database wrapper
-│   │   └── llm_manager.py        # OpenAI-compatible LLM calls
+│   │   ├── lancedb_manager.py    # Vector database wrapper (SQL-filter escaping)
+│   │   └── llm_manager.py        # OpenAI-compatible LLM calls (chat-completions)
 │   ├── config/
-│   │   ├── config_manager.py     # YAML + env-var substitution
+│   │   ├── config_manager.py     # YAML + ${VAR} env-var substitution
 │   │   └── settings.yaml         # Default configuration
 │   └── utils/                    # (reserved for shared helpers)
 ├── tests/
 │   ├── conftest.py               # Shared fixtures
 │   ├── test_api.py               # End-to-end API tests (incl. mode switch)
+│   ├── test_agentic_rag.py       # Agentic loop control, k forwarding, tools
+│   ├── test_bm25_manager.py      # SIRA DF filter, weighted BM25, doc-id filter
 │   ├── test_bootstrap.py
 │   ├── test_chunker.py
 │   ├── test_config_manager.py
 │   ├── test_embedding_manager.py
-│   ├── test_enhancements.py        # Index tuning, BM25 cache, parser robustness
+│   ├── test_enhancements.py      # Index tuning, BM25 cache, parser robustness
 │   ├── test_hyde_rag.py
 │   ├── test_lancedb_manager.py
 │   └── test_llm_manager.py
@@ -324,7 +355,10 @@ HyDSPy/
 
 ### Code quality
 
-The project uses Black for formatting and Flake8 for linting. Both are configured to a line length of 88 (`pyproject.toml` for Black, `.flake8` for Flake8). Run them before committing:
+The project uses Black for formatting and Flake8 for linting. Both are
+configured to a line length of 88 (`[tool.black]` in `pyproject.toml`, and
+`.flake8` for Flake8). Dev dependencies live under
+`[dependency-groups].dev` in `pyproject.toml`. Run them before committing:
 
 ```bash
 uv run black .
@@ -333,7 +367,9 @@ uv run flake8 .
 
 ### Tests
 
-Tests run completely without external services (LLMs are stubbed, LanceDB uses `tmp_path`):
+Tests run completely without external services (LLMs are stubbed, LanceDB uses
+`tmp_path`). The suite covers component behaviour, the agentic loop control,
+the SIRA BM25 pipeline, the API mode switch, and the tool-call parser.
 
 ```bash
 uv run pytest

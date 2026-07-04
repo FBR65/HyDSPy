@@ -1,7 +1,7 @@
 [project]
 name = "hydspy"
 version = "0.1.0"
-description = "HyDE-RAG System mit DSPy und LanceDB"
+description = "HyDE-RAG system with DSPy and LanceDB"
 authors = [
     {name = "Entwickler", email = "entwickler@example.com"},
 ]
@@ -17,9 +17,30 @@ dependencies = [
     "pyarrow>=10.0.0",
     "rank-bm25>=0.2.2",
 ]
-requires-python = ">=3.9"
+requires-python = ">=3.10"
 readme = "README.md"
 license = {text = "MIT"}
+keywords = ["rag", "hyde", "dspy", "lancedb", "bm25", "agentic-rag", "retrieval-augmented-generation"]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: Developers",
+    "License :: OSI Approved :: MIT License",
+    "Operating System :: OS Independent",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Topic :: Scientific/Engineering :: Artificial Intelligence",
+]
+
+[project.urls]
+"Homepage" = "https://example.com/hydspy"
+"Repository" = "https://example.com/hydspy"
+"Issues" = "https://example.com/hydspy/issues"
+
+[project.scripts]
+hydspy = "src.main:main"
 
 [build-system]
 requires = ["setuptools>=61.0", "wheel"]
@@ -29,8 +50,8 @@ build-backend = "setuptools.build_meta"
 where = ["."]
 include = ["src*"]
 
-[tool.uv]
-dev-dependencies = [
+[dependency-groups]
+dev = [
     "pytest>=7.0.0",
     "pytest-asyncio>=0.21.0",
     "httpx>=0.24.0",
@@ -48,5 +69,5 @@ pythonpath = ["src"]
 addopts = "-ra --strict-markers"
 asyncio_mode = "auto"
 markers = [
-    "integration: Tests die echte externe Dienste benötigen (Ollama, etc.)",
+    "integration: tests that require real external services (Ollama, etc.)",
 ]
