@@ -1,7 +1,8 @@
-import re
-import yaml
 import os
-from typing import Dict, Any
+import re
+from typing import Any, Dict
+
+import yaml
 
 # Matches ${VAR_NAME} placeholders anywhere inside a string value.
 # Supports ASCII env-var names (letters, digits, underscore) and is applied
@@ -19,31 +20,33 @@ class ConfigManager:
         with open(config_path, "r") as file:
             self.config = yaml.safe_load(file)
 
-        self._replace_env_vars()
+        self.config = self._replace_env_vars(self.config)
 
-    def _replace_env_vars(self):
+    def _replace_env_vars(self, value: Any) -> Any:
         """
-        Replaces ``${ENV_VAR}`` placeholders inside string values with the
-        corresponding ``os.environ`` value. Placeholders may appear anywhere in
-        the string (e.g. ``"Bearer ${TOKEN}"``) and are substituted repeatedly.
-        Missing env vars are left as the literal placeholder string.
+        Replaces ``${ENV_VAR}`` placeholders with the corresponding
+        ``os.environ`` value.
+
+        Placeholders may appear anywhere in the string (e.g. ``"Bearer
+        ${TOKEN}"``) and are substituted repeatedly. Missing env vars are
+        left as the literal placeholder string. Handles nested dicts and
+        lists recursively.
+
+        :param value: A value from the YAML config (str, dict, list, or other)
+        :return: The value with env vars substituted (same type)
         """
 
-        def replace_in_value(value: str) -> str:
-            def _sub(match: re.Match) -> str:
-                env_var_name = match.group(1)
-                return os.getenv(env_var_name, match.group(0))
+        def _sub(match: re.Match) -> str:
+            env_var_name = match.group(1)
+            return os.getenv(env_var_name, match.group(0))
 
+        if isinstance(value, dict):
+            return {k: self._replace_env_vars(v) for k, v in value.items()}
+        if isinstance(value, list):
+            return [self._replace_env_vars(v) for v in value]
+        if isinstance(value, str):
             return _ENV_VAR_RE.sub(_sub, value)
-
-        def replace_in_dict(d: Dict[str, Any]) -> None:
-            for key, value in d.items():
-                if isinstance(value, dict):
-                    replace_in_dict(value)
-                elif isinstance(value, str):
-                    d[key] = replace_in_value(value)
-
-        replace_in_dict(self.config)
+        return value
 
     def get_llm_config(self, llm_type: str) -> Dict[str, Any]:
         """
@@ -74,7 +77,7 @@ class ConfigManager:
         """
         Returns the general settings block (chunk_size, etc.).
 
-        :return: Dictionary with general settings; defaults to {'chunk_size': 1000}
-            when the block is absent.
+        :return: Dictionary with general settings; defaults to
+            {'chunk_size': 1000} when the block is absent.
         """
         return self.config.get("settings", {"chunk_size": 1000})

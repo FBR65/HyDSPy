@@ -1,7 +1,9 @@
 import logging
-import lancedb
-import pandas as pd
 from typing import List, Optional
+
+import pandas as pd
+
+import lancedb
 
 logger = logging.getLogger(__name__)
 
@@ -27,22 +29,21 @@ class LanceDBManager:
         index_train_threshold: int = 256,
     ):
         """
-        Initialisiert den LanceDB-Manager.
+        Initialises the LanceDB manager.
 
-        :param uri: URI zur LanceDB-Datenbank
-        :param table_name: Name der Tabelle in der Datenbank
-        :param index_type: Vektor-Index-Typ (z.B. ``IVF_PQ``, ``IVF_FLAT``,
-            ``IVF_HNSW_SQ``, ``IVF_HNSW_PQ``). ``None`` deaktiviert den
-            Index-Build; LanceDB nutzt dann einen sequentiellen Scan.
-        :param num_partitions: Anzahl der IVF-Partitionen. ``None`` überlässt
-            die Wahl LanceDB (Default: sqrt(N)). Fuer kleine Korpora ist ein
-            kleiner Wert (z.B. 16) sinnvoller.
-        :param num_sub_vectors: Anzahl der PQ-Sub-Vektoren. ``None`` uberlässt
-            die Wahl LanceDB. Nur relevant fuer ``IVF_PQ``/``IVF_HNSW_PQ``.
-        :param index_train_threshold: Minimale Zeilenzahl, ab der ein
-            Vektor-Index aufgebaut wird. Unter diesem Schwellwert bleibt es
-            beim Default-Index (Sequenz-Scan), da IVF-Training sonst
-            instabil wird.
+        :param uri: URI to the LanceDB database
+        :param table_name: Name of the table in the database
+        :param index_type: Vector index type (e.g. ``IVF_PQ``, ``IVF_FLAT``,
+            ``IVF_HNSW_SQ``, ``IVF_HNSW_PQ``). ``None`` disables index build;
+            LanceDB then uses a sequential scan.
+        :param num_partitions: Number of IVF partitions. ``None`` leaves the
+            choice to LanceDB (default: sqrt(N)). A small value (e.g. 16) is
+            recommended for small corpora.
+        :param num_sub_vectors: Number of PQ sub-vectors. ``None`` leaves the
+            choice to LanceDB. Only relevant for ``IVF_PQ`` / ``IVF_HNSW_PQ``.
+        :param index_train_threshold: Minimum row count before a vector index
+            is built. Below this threshold the default index (sequential scan)
+            is used, as IVF training can be unstable on small datasets.
         """
         self.db = lancedb.connect(uri)
         self.table_name = table_name
@@ -54,7 +55,7 @@ class LanceDBManager:
         self._index_built = False
 
     def _open_table(self):
-        """Öffnet die Tabelle, gibt None zurück, falls sie nicht existiert."""
+        """Opens the table, returning None if it does not exist."""
         try:
             self.table = self.db.open_table(self.table_name)
             return self.table
@@ -64,9 +65,9 @@ class LanceDBManager:
 
     def create_table_from_df(self, df: pd.DataFrame):
         """
-        Erstellt eine neue Tabelle in der Datenbank aus einem DataFrame.
+        Creates a new table in the database from a DataFrame.
 
-        :param df: DataFrame mit den Daten
+        :param df: DataFrame with the data
         """
         self.table = self.db.create_table(self.table_name, data=df)
         self._maybe_build_index()
@@ -74,10 +75,10 @@ class LanceDBManager:
 
     def get_or_create_table_from_df(self, df: pd.DataFrame):
         """
-        Ruft eine vorhandene Tabelle ab oder erstellt sie aus einem DataFrame.
+        Retrieves an existing table or creates it from a DataFrame.
 
-        :param df: DataFrame mit den Daten
-        :return: LanceDB-Tabelle
+        :param df: DataFrame with the data
+        :return: LanceDB table
         """
         if self._open_table() is None:
             self.table = self.db.create_table(self.table_name, data=df)
@@ -86,27 +87,24 @@ class LanceDBManager:
 
     def add_documents_from_df(self, df: pd.DataFrame):
         """
-        Fügt Dokumente zur Tabelle aus einem DataFrame hinzu.
+        Adds documents to the table from a DataFrame.
 
-        Setzt das ``_index_built``-Flag zurück, damit der Vektor-Index beim
-        nächsten ``_maybe_build_index()``-Aufruf (falls die Zeilenzahl den
-        Schwellwert erreicht) neu aufgebaut wird. Bei wachsenden Korpora
-        verhindert das einen veralteten Index.
+        Resets the ``_index_built`` flag so the vector index is rebuilt by the
+        next ``_maybe_build_index()`` call once the row count crosses the
+        threshold. This prevents a stale index on growing corpora.
         """
         if self._open_table() is None:
             self.table = self.db.create_table(self.table_name, data=df)
         else:
             self.table.add(df)
-        # Neue Daten -> ein vorhandener Index ist potentiell veraltet; beim
-        # naechsten _maybe_build_index() wird er bei Bedarf neu aufgebaut.
+        # New data may invalidate an existing index; rebuild on next call.
         self._index_built = False
         self._maybe_build_index()
 
     def _maybe_build_index(self) -> None:
-        """Baut den konfigurierten Vektor-Index auf, sobald genug Daten
-        vorhanden sind. Idempotent: ein bereits gebauter Index wird nicht
-        erneut erzeugt. Bei wachsenden Korpora ist ein manuelles
-        ``rebuild_index()`` ratsam."""
+        """Builds the configured vector index once enough data is available.
+        Idempotent: an already-built index is not recreated. For growing
+        corpora a manual ``rebuild_index()`` is recommended."""
         if self.index_type is None or self._index_built:
             return
         table = self._open_table()
@@ -126,17 +124,13 @@ class LanceDBManager:
                 kwargs["num_sub_vectors"] = self.num_sub_vectors
             table.create_index(**kwargs)
             self._index_built = True
-            logger.info("Vektor-Index '%s' aufgebaut (%d Zeilen).", self.index_type, n)
+            logger.info("Vector index '%s' built (%d rows).", self.index_type, n)
         except Exception as e:
-            logger.warning(
-                "Aufbau des Vektor-Index '%s' fehlgeschlagen: %s",
-                self.index_type,
-                e,
-            )
+            logger.warning("Vector index build '%s' failed: %s", self.index_type, e)
 
     def rebuild_index(self) -> None:
-        """Erzwingt einen Neuaufbau des Vektor-Index (z.B. nach großen
-        Einfüge-Operationen)."""
+        """Forces a rebuild of the vector index (e.g. after large insert
+        operations)."""
         self._index_built = False
         self._maybe_build_index()
 
@@ -147,12 +141,12 @@ class LanceDBManager:
         document_id: Optional[str] = None,
     ) -> pd.DataFrame:
         """
-        Sucht nach ähnlichen Vektoren in der Datenbank.
+        Searches for similar vectors in the database.
 
-        :param query_vector: Abfragevektor
-        :param limit: Maximale Anzahl von Ergebnissen
-        :param document_id: Optionaler Filter auf das Feld 'document_id'
-        :return: Suchergebnisse als DataFrame
+        :param query_vector: Query vector
+        :param limit: Maximum number of results
+        :param document_id: Optional filter on the 'document_id' field
+        :return: Search results as a DataFrame
         """
         table = self._open_table()
         if table is None:
@@ -165,17 +159,15 @@ class LanceDBManager:
                 )
             return query.limit(limit).to_pandas()
         except Exception as e:
-            logger.warning(
-                "Suche in Tabelle '%s' fehlgeschlagen: %s", self.table_name, e
-            )
+            logger.warning("Search in table '%s' failed: %s", self.table_name, e)
             return pd.DataFrame()
 
     def delete_document(self, document_id: str) -> int:
         """
-        Entfernt alle Chunks mit dem angegebenen document_id aus der Tabelle.
+        Removes all chunks with the given document_id from the table.
 
-        :param document_id: ID des zu löschenden Dokuments
-        :return: Anzahl der entfernten Zeilen
+        :param document_id: ID of the document to delete
+        :return: Number of removed rows
         """
         table = self._open_table()
         if table is None:
@@ -186,22 +178,20 @@ class LanceDBManager:
             count_after = table.count_rows()
             return count_before - count_after
         except Exception as e:
-            logger.error(
-                "Löschen von document_id='%s' fehlgeschlagen: %s", document_id, e
-            )
+            logger.error("Delete of document_id='%s' failed: %s", document_id, e)
             raise
 
     def get_document_chunks(self, document_id: str) -> pd.DataFrame:
         """
-        Liefert alle Chunks eines Dokuments, sortiert nach ``chunk_index``.
+        Returns all chunks of a document, sorted by ``chunk_index``.
 
-        Öffentliche Alternative zum direkten Zugriff auf ``_open_table()`` /
-        ``table.to_pandas()``, damit Aufrufer (z.B. die agentic ``open``-Tool)
-        nicht auf LanceDB-Internals zugreifen müssen.
+        Public alternative to direct ``_open_table()`` / ``table.to_pandas()``
+        access so callers (e.g. the agentic ``open`` tool) do not need to
+        touch LanceDB internals.
 
-        :param document_id: ID des Dokuments
-        :return: DataFrame mit den Chunks des Dokuments (leer, falls nicht
-            vorhanden oder die Tabelle nicht existiert)
+        :param document_id: ID of the document
+        :return: DataFrame with the document's chunks (empty if absent or
+            the table does not exist)
         """
         table = self._open_table()
         if table is None:
@@ -209,7 +199,7 @@ class LanceDBManager:
         try:
             df = table.to_pandas()
         except Exception as e:
-            logger.warning("get_document_chunks fehlgeschlagen: %s", e)
+            logger.warning("get_document_chunks failed: %s", e)
             return pd.DataFrame()
         if df.empty or "document_id" not in df.columns:
             return pd.DataFrame()
@@ -221,9 +211,10 @@ class LanceDBManager:
 
     def list_documents(self) -> List[dict]:
         """
-        Liefert eine Übersicht aller indizierten Dokumente.
+        Returns an overview of all indexed documents.
 
-        :return: Liste mit {document_id, chunk_count, first_chunk_index, last_chunk_index}
+        :return: List of dicts with keys: document_id, chunk_count,
+            first_chunk_index, last_chunk_index
         """
         table = self._open_table()
         if table is None:
@@ -231,7 +222,7 @@ class LanceDBManager:
         try:
             df = table.to_pandas()
         except Exception as e:
-            logger.warning("list_documents fehlgeschlagen: %s", e)
+            logger.warning("list_documents failed: %s", e)
             return []
         if df.empty or "document_id" not in df.columns:
             return []

@@ -35,9 +35,9 @@ from typing import Any, Dict, List, Optional
 
 import dspy
 
-from .lancedb_manager import LanceDBManager
-from .embedding_manager import EmbeddingManager
 from .bm25_manager import BM25Manager
+from .embedding_manager import EmbeddingManager
+from .lancedb_manager import LanceDBManager
 
 logger = logging.getLogger(__name__)
 
@@ -271,7 +271,12 @@ class AgenticRAG(dspy.Module):
         )
         self.step = dspy.ChainOfThought(AgenticStep)
 
-    def forward(self, question: str, document_id: str = None, k: int = None):
+    def forward(
+        self,
+        question: str,
+        document_id: Optional[str] = None,
+        k: int = None,
+    ):
         state = AgenticState(question=question, document_id=document_id)
         state.k = self.default_k if k is None else k
         last_action = ""
@@ -281,6 +286,9 @@ class AgenticRAG(dspy.Module):
             try:
                 res = self.step(question=state.question, tool_history=tool_history_json)
             except Exception as e:
+                # DSPy/ChainOfThought can raise various exceptions (network,
+                # parse, API-level) — none of which should crash the agentic
+                # loop. We log and break so the forced-final-answer path runs.
                 logger.warning("Agentic step LLM call failed: %s", e)
                 break
             action_raw = (res.next_action or "").strip()

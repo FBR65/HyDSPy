@@ -4,7 +4,6 @@ Verwendet eine tempdir-Instanz - keine externen Dienste.
 """
 
 import pandas as pd
-import pytest
 
 from src.components.lancedb_manager import LanceDBManager
 

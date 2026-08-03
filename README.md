@@ -59,7 +59,7 @@ Options under `settings:`:
 | `bm25_hybrid` | `true` | Enables the SIRA BM25 hybrid branch. Term prediction, DF filtering and weighted BM25 are combined with the vector ranking via RRF. |
 | `expansion_weight` | `0.5` | Weight `w` in the weighted BM25 formula `BM25(q_orig) + w * BM25(q_exp)`. |
 | `df_threshold` | `0.1` | Max fraction of documents a predicted term may occur in to survive the DF filter (`0 < DF <= df_threshold * N`). |
-| `agentic_enabled` | `true` | Documented but currently not evaluated by `build()`; the `AgenticRAG` module is always instantiated at startup. The `agentic` retrieval mode is therefore always available via the API. |
+| `agentic_enabled` | `true` | When `false`, the `AgenticRAG` module is **not** instantiated at startup and the `agentic` retrieval mode returns 503. All other modes (including `hyde`) continue to work. |
 | `max_calls` | `15` | Maximum number of iterations in the agentic loop before a final answer is forced. |
 | `token_threshold` | `115200` | Token estimate (90% of 128k) at which the agentic loop forces a `summarize` call to compress the evidence trail. The token budget may be exceeded; the threshold only triggers summarisation. |
 | `search_limit` | `10` | Maximum number of results returned per query inside the agentic `search` tool. |
@@ -355,14 +355,14 @@ HyDSPy/
 
 ### Code quality
 
-The project uses Black for formatting and Flake8 for linting. Both are
-configured to a line length of 88 (`[tool.black]` in `pyproject.toml`, and
-`.flake8` for Flake8). Dev dependencies live under
+The project uses [Ruff](https://docs.astral.sh/ruff/) for both formatting and
+linting, configured under `[tool.ruff]` in `pyproject.toml` (line length 88,
+target Python 3.10+). Dev dependencies live under
 `[dependency-groups].dev` in `pyproject.toml`. Run them before committing:
 
 ```bash
-uv run black .
-uv run flake8 .
+uv run ruff format src/ tests/
+uv run ruff check src/ tests/
 ```
 
 ### Tests

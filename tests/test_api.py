@@ -1,33 +1,26 @@
-"""End-to-End Tests fuer die FastAPI-Anwendung.
+"""End-to-end tests for the FastAPI application.
 
-Es wird KEIN echter Ollama / keine echte LLM-API benoetigt. Die Komponenten
-werden mit Stub-Klassen (Fallback-LLMs, tempdir-LanceDB) ersetzt.
+No real Ollama / LLM API is required. Components are replaced with stub
+classes (fallback LLMs, tempdir LanceDB).
 """
 
 from __future__ import annotations
 
-import os
-import sys
 from contextlib import asynccontextmanager
 from unittest.mock import MagicMock
 
 import pytest
 from fastapi.testclient import TestClient
 
-# Make sure src.* imports work
-_SRC = os.path.join(os.path.dirname(__file__), "..", "src")
-if _SRC not in sys.path:
-    sys.path.insert(0, _SRC)
-
 from src.api import app as app_module
 from src.bootstrap import Components
+from src.components.agentic_rag import AgenticRAG
+from src.components.bm25_manager import BM25Manager
 from src.components.chunker import SemanticChunker
 from src.components.document_processor import DocumentProcessor
 from src.components.embedding_manager import EmbeddingManager
 from src.components.hyde_rag import HyDERAG
 from src.components.lancedb_manager import LanceDBManager
-from src.components.bm25_manager import BM25Manager
-from src.components.agentic_rag import AgenticRAG
 from src.config.config_manager import ConfigManager
 
 
@@ -63,8 +56,8 @@ class _StubClient:
 def stub_components(tmp_path, monkeypatch) -> Components:
     """Builds a fully functional Components instance without external services.
 
-    The embedding client is monkey-patched to return deterministic 8-dim vectors
-    so the LanceDB search path produces reproducible results.
+    The embedding client is monkey-patched to return deterministic 8-dim
+    vectors so the LanceDB search path produces reproducible results.
     """
     cfg = ConfigManager()
     db_manager = LanceDBManager(uri=str(tmp_path), table_name="docs")
@@ -110,12 +103,66 @@ def stub_components(tmp_path, monkeypatch) -> Components:
 
 
 @pytest.fixture
+def stub_components_no_agentic(tmp_path, monkeypatch) -> Components:
+    """Components with agentic_rag=None (agentic_enabled=False scenario)."""
+    cfg = ConfigManager()
+    db_manager = LanceDBManager(uri=str(tmp_path), table_name="docs")
+    bm25_manager = BM25Manager(db_manager=db_manager)
+    comps = Components(
+        config_manager=cfg,
+        chunk_llm_manager=None,
+        answer_llm_manager=None,
+        embedding_manager=EmbeddingManager("http://localhost:1", "k", "fake"),
+        db_manager=db_manager,
+        chunker=SemanticChunker(llm_manager=None, chunk_size=500),
+        document_processor=None,
+        hyde_rag=None,
+        bm25_manager=bm25_manager,
+        agentic_rag=None,
+    )
+    monkeypatch.setattr(comps.embedding_manager, "client", _StubClient(dim=8))
+
+    comps.document_processor = DocumentProcessor(
+        comps.chunker, comps.embedding_manager, comps.db_manager
+    )
+    comps.hyde_rag = HyDERAG(
+        comps.db_manager, comps.embedding_manager, bm25_manager=bm25_manager
+    )
+    comps.hyde_rag.generate_hyde = MagicMock(
+        return_value=MagicMock(hypothetical_document="hypo")
+    )
+    comps.hyde_rag.generate_queries = MagicMock(return_value=MagicMock(queries=""))
+    comps.hyde_rag.predict_terms = MagicMock(return_value=MagicMock(terms=""))
+    comps.hyde_rag.final_rag = MagicMock(return_value=MagicMock(answer="stub answer"))
+    # agentic_rag stays None — simulating agentic_enabled=False.
+    return comps
+
+
+@pytest.fixture
 def client(stub_components) -> TestClient:
     """TestClient with stub components via lifespan override."""
 
     @asynccontextmanager
     async def stub_lifespan(app):
         app.state.components = stub_components
+        yield
+
+    original = app_module.app.router.lifespan_context
+    app_module.app.router.lifespan_context = stub_lifespan
+    try:
+        with TestClient(app_module.app) as c:
+            yield c
+    finally:
+        app_module.app.router.lifespan_context = original
+
+
+@pytest.fixture
+def no_agentic_client(stub_components_no_agentic) -> TestClient:
+    """TestClient with agentic_rag=None."""
+
+    @asynccontextmanager
+    async def stub_lifespan(app):
+        app.state.components = stub_components_no_agentic
         yield
 
     original = app_module.app.router.lifespan_context
@@ -145,7 +192,7 @@ def broken_client() -> TestClient:
         app_module.app.router.lifespan_context = original
 
 
-# --- Routes-Discovery ---
+# --- Route discovery ---
 
 
 def test_required_routes_are_registered():
@@ -169,7 +216,7 @@ def test_health_degraded_when_uninitialised(broken_client):
     assert r.json() == {"status": "degraded", "components_initialised": False}
 
 
-# --- 503 bei fehlender Initialisierung ---
+# --- 503 when not initialised ---
 
 
 @pytest.mark.parametrize(
@@ -190,16 +237,16 @@ def test_endpoints_return_503_when_uninitialised(broken_client, method, url, jso
     assert r.status_code == 503, f"{method} {url} -> {r.status_code} {r.text}"
 
 
-# --- Pydantic-Validierung ---
+# --- Pydantic validation ---
 
 
 @pytest.mark.parametrize(
     "payload",
     [
-        {"question": ""},  # leere question
-        {"question": "x", "k": 0},  # k zu klein
-        {"question": "x", "k": 999},  # k zu gross
-        {"question": "x", "document_id": "a" * 300},  # document_id zu lang
+        {"question": ""},  # empty question
+        {"question": "x", "k": 0},  # k too small
+        {"question": "x", "k": 999},  # k too large
+        {"question": "x", "document_id": "a" * 300},  # document_id too long
     ],
 )
 def test_ask_validation_422(client, payload):
@@ -210,10 +257,10 @@ def test_ask_validation_422(client, payload):
 @pytest.mark.parametrize(
     "payload",
     [
-        {"id": "", "text": "x"},  # leere id
-        {"id": "abc"},  # text fehlt
-        {"id": "a" * 300, "text": "x"},  # id zu lang
-        {"id": "x", "text": ""},  # leerer text
+        {"id": "", "text": "x"},  # empty id
+        {"id": "abc"},  # text missing
+        {"id": "a" * 300, "text": "x"},  # id too long
+        {"id": "x", "text": ""},  # empty text
     ],
 )
 def test_process_document_validation_422(client, payload):
@@ -221,13 +268,20 @@ def test_process_document_validation_422(client, payload):
     assert r.status_code == 422
 
 
-# --- Happy Path ---
+def test_ask_unknown_mode_returns_422(client):
+    """With Literal mode, an unknown mode is rejected by Pydantic at
+    validation time (422), not at runtime."""
+    r = client.post("/ask", json={"question": "?", "mode": "bogus"})
+    assert r.status_code == 422
+
+
+# --- Happy path ---
 
 
 def test_process_document_returns_chunk_count(client):
     r = client.post(
         "/process_document",
-        json={"id": "doc1", "text": "Absatz eins.\n\nAbsatz zwei."},
+        json={"id": "doc1", "text": "Paragraph one.\n\nParagraph two."},
     )
     assert r.status_code == 200
     body = r.json()
@@ -248,11 +302,11 @@ def test_documents_lists_indexed_documents(client):
 def test_ask_with_document_id_filter_excludes_other_documents(client):
     client.post(
         "/process_document",
-        json={"id": "alpha", "text": "Inhalt alpha. Mehr alpha."},
+        json={"id": "alpha", "text": "Content alpha. More alpha."},
     )
     client.post(
         "/process_document",
-        json={"id": "beta", "text": "Anderes Thema komplett anders."},
+        json={"id": "beta", "text": "Different topic entirely."},
     )
     r = client.post("/ask", json={"question": "?", "document_id": "alpha", "k": 2})
     assert r.status_code == 200, r.text
@@ -262,7 +316,7 @@ def test_ask_with_document_id_filter_excludes_other_documents(client):
 
 
 def test_ask_default_parameters(client):
-    client.post("/process_document", json={"id": "d", "text": "irgendwas"})
+    client.post("/process_document", json={"id": "d", "text": "some text"})
     r = client.post("/ask", json={"question": "?"})
     assert r.status_code == 200
     assert "answer" in r.json()
@@ -291,7 +345,7 @@ def test_delete_document_id_too_long(client):
     assert r.status_code == 400
 
 
-# --- Eingabegrenze Frage ---
+# --- Input size limit on question ---
 
 
 def test_ask_too_long_question_422(client):
@@ -299,11 +353,11 @@ def test_ask_too_long_question_422(client):
     assert r.status_code == 422
 
 
-# --- mode-Umschalter (HyDE vs. Agentic) ---
+# --- mode switch (HyDE vs. Agentic) ---
 
 
 def test_ask_default_mode_is_hyde(client):
-    client.post("/process_document", json={"id": "d", "text": "irgendwas"})
+    client.post("/process_document", json={"id": "d", "text": "some text"})
     r = client.post("/ask", json={"question": "?"})
     assert r.status_code == 200
     body = r.json()
@@ -311,14 +365,14 @@ def test_ask_default_mode_is_hyde(client):
 
 
 def test_ask_explicit_hyde_mode(client):
-    client.post("/process_document", json={"id": "d", "text": "irgendwas"})
+    client.post("/process_document", json={"id": "d", "text": "some text"})
     r = client.post("/ask", json={"question": "?", "mode": "hyde"})
     assert r.status_code == 200
     assert r.json()["answer"] == "stub answer"
 
 
 def test_ask_agentic_mode(client):
-    client.post("/process_document", json={"id": "d", "text": "irgendwas"})
+    client.post("/process_document", json={"id": "d", "text": "some text"})
     r = client.post("/ask", json={"question": "?", "mode": "agentic"})
     assert r.status_code == 200, r.text
     body = r.json()
@@ -326,12 +380,41 @@ def test_ask_agentic_mode(client):
     assert body["context"] == "agentic ctx"
 
 
-def test_ask_unknown_mode_returns_422(client):
-    r = client.post("/ask", json={"question": "?", "mode": "bogus"})
-    assert r.status_code == 422
-    assert "bogus" in r.json()["detail"]
-
-
 def test_ask_agentic_mode_when_not_initialised(broken_client):
     r = broken_client.post("/ask", json={"question": "?", "mode": "agentic"})
     assert r.status_code == 503
+
+
+def test_ask_agentic_mode_when_disabled(no_agentic_client):
+    """When agentic_enabled=False (agentic_rag=None), /ask?mode=agentic
+    must return 503 instead of crashing."""
+    no_agentic_client.post("/process_document", json={"id": "d", "text": "some text"})
+    r = no_agentic_client.post("/ask", json={"question": "?", "mode": "agentic"})
+    assert r.status_code == 503
+    assert "not initialised" in r.json()["detail"]
+    assert r.json()["detail"] == "Agentic-RAG mode is not initialised."
+
+
+def test_ask_hyde_mode_still_works_when_agentic_disabled(no_agentic_client):
+    """HyDE mode must work even when agentic is disabled."""
+    no_agentic_client.post("/process_document", json={"id": "d", "text": "some text"})
+    r = no_agentic_client.post("/ask", json={"question": "?", "mode": "hyde"})
+    assert r.status_code == 200
+    assert r.json()["answer"] == "stub answer"
+
+
+def test_ask_hides_internal_error_details(client):
+    """When an unexpected exception is raised, the response must not leak
+    exception details to the client (security)."""
+    from unittest.mock import MagicMock as _MM
+
+    # Force hyde_rag to raise an unexpected error.
+    comps = app_module.app.state.components
+    comps.hyde_rag.final_rag = _MM(
+        side_effect=RuntimeError("secret internal path /etc/passwd")
+    )
+    client.post("/process_document", json={"id": "d", "text": "some text"})
+    r = client.post("/ask", json={"question": "?"})
+    # RuntimeError maps to 502; the detail must not contain the secret.
+    assert r.status_code == 502
+    assert "secret internal" not in r.json()["detail"]

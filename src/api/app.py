@@ -2,6 +2,7 @@ import asyncio
 import logging
 import re
 from contextlib import asynccontextmanager
+from typing import Literal
 
 from fastapi import FastAPI, HTTPException, status
 from pydantic import BaseModel, Field, field_validator
@@ -13,26 +14,30 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
-# Limits für Eingabevalidierung
-MAX_DOCUMENT_TEXT_LENGTH = 1_000_000  # 1 MB Text pro Dokument
+# Input validation limits
+MAX_DOCUMENT_TEXT_LENGTH = 1_000_000  # 1 MB text per document
 MAX_QUESTION_LENGTH = 4_000
 MAX_DOCUMENT_ID_LENGTH = 256
 MAX_K = 20
 
-# Erlaubte Zeichen für document_id: alphanumerisch, sowie _, -, :, . und /.
-# Verhindert Filter-/SQL-Injection über den document_id-Filter, da diese IDs
-# direkt in LanceDB-SQL-Filter interpoliert werden (siehe LanceDBManager).
+# Allowed characters for document_id: alphanumeric plus _, -, :, . and /.
+# Prevents SQL/filter injection via the document_id filter, which is
+# interpolated directly into LanceDB SQL-style filters (see LanceDBManager).
 _DOCUMENT_ID_PATTERN = r"^[A-Za-z0-9_\-:./]+$"
+
+# Retrieval modes accepted by the /ask endpoint.
+RetrievalMode = Literal["hyde", "agentic"]
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    """Initialisiert Komponenten asynchron im Hintergrund und teardown beim Shutdown.
+    """Initialise components asynchronously in the background and teardown on
+    shutdown.
 
-    Die schwere Initialisierung (Modell-Clients, DSPy-LM, LanceDB) laeuft in
-    einem Hintergrund-Task, sodass der Server sofort startet und Anfragen
-    annimmt. Bis die Initialisierung abgeschlossen ist, liefern die Endpoints
-    503 (``_get_components`` prueft ``app.state.components``).
+    The heavy initialisation (model clients, DSPy-LM, LanceDB) runs in a
+    background task so the server starts and accepts requests immediately.
+    Until initialisation is complete, endpoints return 503
+    (``_get_components`` checks ``app.state.components``).
     """
     app.state.components = None
     app.state.init_task = None
@@ -46,14 +51,14 @@ async def lifespan(app: FastAPI):
         try:
             comps = await loop.run_in_executor(None, _init)
             if not comps.initialised:
-                logger.error("Komponenten unvollständig initialisiert.")
+                logger.error("Components not fully initialised.")
                 app.state.components = None
                 app.state.init_error = "incomplete"
                 return
             app.state.components = comps
-            logger.info("API-Komponenten erfolgreich initialisiert.")
+            logger.info("API components initialised successfully.")
         except Exception as e:
-            logger.exception("API-Initialisierung fehlgeschlagen")
+            logger.exception("API initialisation failed")
             app.state.init_error = str(e)
 
     app.state.init_task = asyncio.create_task(_run_init())
@@ -62,19 +67,19 @@ async def lifespan(app: FastAPI):
     finally:
         if app.state.init_task is not None and not app.state.init_task.done():
             app.state.init_task.cancel()
-        logger.info("API wird heruntergefahren.")
+        logger.info("API shutting down.")
 
 
 app = FastAPI(
     title="HyDE-RAG API",
-    description="API für das HyDE-RAG System",
+    description="API for the HyDE-RAG system",
     lifespan=lifespan,
 )
 
 
 def _get_components() -> Components:
-    """Liefert die initialisierten Komponenten oder 503, falls die
-    Initialisierung noch laeuft oder fehlgeschlagen ist."""
+    """Return initialised components or raise 503 if initialisation is still
+    in progress or has failed."""
     comps: Components | None = getattr(app.state, "components", None)
     if comps is not None:
         return comps
@@ -82,13 +87,13 @@ def _get_components() -> Components:
     if init_task is not None and not init_task.done():
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail="API wird noch initialisiert (siehe Server-Logs)",
+            detail="API is still initialising (see server logs)",
         )
     err = getattr(app.state, "init_error", None)
     detail = (
-        f"API-Initialisierung fehlgeschlagen: {err}"
-        if err and err != "incomplete"
-        else "API nicht initialisiert (siehe Server-Logs)"
+        "API initialisation failed: see server logs"
+        if err
+        else "API not initialised (see server logs)"
     )
     raise HTTPException(
         status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
@@ -101,13 +106,13 @@ class Document(BaseModel):
         ...,
         min_length=1,
         max_length=MAX_DOCUMENT_ID_LENGTH,
-        description="Eindeutige Dokument-ID",
+        description="Unique document ID",
     )
     text: str = Field(
         ...,
         min_length=1,
         max_length=MAX_DOCUMENT_TEXT_LENGTH,
-        description="Dokumenttext (max. 1 MB)",
+        description="Document text (max. 1 MB)",
     )
 
     @field_validator("id")
@@ -115,8 +120,7 @@ class Document(BaseModel):
     def _validate_id(cls, v: str) -> str:
         if not re.fullmatch(_DOCUMENT_ID_PATTERN, v):
             raise ValueError(
-                "document_id darf nur alphanumerische Zeichen sowie "
-                "_ - : . / enthalten"
+                "document_id may only contain alphanumeric characters and _ - : . /"
             )
         return v
 
@@ -131,7 +135,7 @@ class Question(BaseModel):
     document_id: str | None = Field(
         default=None,
         max_length=MAX_DOCUMENT_ID_LENGTH,
-        description="Optional: Suche auf ein bestimmtes Dokument einschränken",
+        description="Optional: restrict search to a specific document",
     )
 
     @field_validator("document_id")
@@ -141,18 +145,19 @@ class Question(BaseModel):
             return v
         if not re.fullmatch(_DOCUMENT_ID_PATTERN, v):
             raise ValueError(
-                "document_id darf nur alphanumerische Zeichen sowie "
-                "_ - : . / enthalten"
+                "document_id may only contain alphanumeric characters and _ - : . /"
             )
         return v
 
     k: int = Field(
-        default=3, ge=1, le=MAX_K, description="Anzahl der abgerufenen Kontexte"
+        default=3, ge=1, le=MAX_K, description="Number of contexts retrieved"
     )
-    mode: str = Field(
+    mode: RetrievalMode = Field(
         default="hyde",
-        description="Retrieval-Modus: 'hyde' (HyDE + Multi-Query + BM25-Hybrid) "
-        "oder 'agentic' (iterativer Agentic-RAG-Loop).",
+        description=(
+            "Retrieval mode: 'hyde' (HyDE + Multi-Query + BM25-Hybrid) "
+            "or 'agentic' (iterative Agentic-RAG loop)."
+        ),
     )
 
 
@@ -170,28 +175,26 @@ class DocumentSummary(BaseModel):
 
 @app.post("/process_document", response_model=ProcessedDocument)
 async def process_document(document: Document):
-    """
-    Verarbeitet ein Dokument durch Chunking, Vektorisierung und speichert es in der Datenbank.
-    """
+    """Process a document through chunking, vectorisation, and store it in the
+    database."""
     comps = _get_components()
     try:
         chunks = comps.document_processor.process_document(document.id, document.text)
         return ProcessedDocument(document_id=document.id, chunks=len(chunks))
-    except Exception as e:
-        logger.exception("Fehler bei der Dokumentenverarbeitung")
+    except Exception:
+        logger.exception("Document processing failed")
         raise HTTPException(
-            status_code=500, detail=f"Fehler bei der Dokumentenverarbeitung: {e}"
+            status_code=500, detail="Document processing failed (see server logs)"
         )
 
 
 @app.post("/ask", response_model=Answer)
 async def ask_question(question: Question):
-    """
-    Beantwortet eine Frage basierend auf den in der Datenbank gespeicherten Dokumenten.
+    """Answer a question based on documents stored in the database.
 
-    Über ``mode`` wird der Retrieval-Modus gewählt:
-      - ``hyde``: Single-Shot HyDE mit Multi-Query-Reformulation und BM25-Hybrid (Default).
-      - ``agentic``: Iterativer Agentic-RAG-Loop (search/find/open/summarize).
+    The ``mode`` parameter selects the retrieval strategy:
+      - ``hyde``: Single-shot HyDE with Multi-Query reformulation and BM25-Hybrid.
+      - ``agentic``: Iterative Agentic-RAG loop (search/find/open/summarize).
     """
     comps = _get_components()
     mode = (question.mode or "hyde").lower()
@@ -200,7 +203,7 @@ async def ask_question(question: Question):
             if comps.agentic_rag is None:
                 raise HTTPException(
                     status_code=503,
-                    detail="Agentic-RAG-Modus ist nicht initialisiert.",
+                    detail="Agentic-RAG mode is not initialised.",
                 )
             result = comps.agentic_rag(
                 question.question,
@@ -216,62 +219,60 @@ async def ask_question(question: Question):
         else:
             raise HTTPException(
                 status_code=422,
-                detail=f"Unbekannter mode '{mode}': 'hyde' oder 'agentic' erwartet.",
+                detail=f"Unknown mode '{mode}': expected 'hyde' or 'agentic'.",
             )
         return Answer(answer=result.answer, context=result.context)
     except HTTPException:
         raise
-    except RuntimeError as e:
-        logger.exception("Fragebeantwortung fehlgeschlagen")
+    except RuntimeError:
+        logger.exception("Question answering failed")
         raise HTTPException(
-            status_code=502, detail=f"Fragebeantwortung fehlgeschlagen: {e}"
+            status_code=502, detail="Question answering failed (see server logs)"
         )
-    except Exception as e:
-        logger.exception("Unerwarteter Fehler bei der Fragebeantwortung")
+    except Exception:
+        logger.exception("Unexpected error during question answering")
         raise HTTPException(
-            status_code=500, detail=f"Fehler bei der Fragebeantwortung: {e}"
+            status_code=500, detail="Question answering failed (see server logs)"
         )
 
 
 @app.get("/documents", response_model=list[DocumentSummary])
 async def list_documents():
-    """
-    Liefert eine Übersicht aller indizierten Dokumente.
-    """
+    """Return an overview of all indexed documents."""
     comps = _get_components()
     try:
         return comps.db_manager.list_documents()
-    except Exception as e:
-        logger.exception("Fehler beim Auflisten der Dokumente")
-        raise HTTPException(status_code=500, detail=str(e))
+    except Exception:
+        logger.exception("Failed to list documents")
+        raise HTTPException(
+            status_code=500, detail="Failed to list documents (see server logs)"
+        )
 
 
 @app.delete("/documents/{document_id}")
 async def delete_document(document_id: str):
-    """
-    Entfernt alle Chunks eines Dokuments aus der Datenbank.
-    """
+    """Remove all chunks belonging to a document from the database."""
     if len(document_id) > MAX_DOCUMENT_ID_LENGTH or not re.fullmatch(
         _DOCUMENT_ID_PATTERN, document_id
     ):
         raise HTTPException(
             status_code=400,
-            detail="document_id ungültig (nur alphanumerisch und _ - : . /)",
+            detail="document_id invalid (only alphanumeric and _ - : . / allowed)",
         )
     comps = _get_components()
     try:
         removed = comps.db_manager.delete_document(document_id)
-    except Exception as e:
-        logger.exception("Fehler beim Löschen des Dokuments")
-        raise HTTPException(status_code=500, detail=str(e))
+    except Exception:
+        logger.exception("Failed to delete document")
+        raise HTTPException(
+            status_code=500, detail="Failed to delete document (see server logs)"
+        )
     return {"document_id": document_id, "removed": removed}
 
 
 @app.get("/health")
 async def health_check():
-    """
-    Prüft den Status der API.
-    """
+    """Check the API status."""
     comps = getattr(app.state, "components", None)
     return {
         "status": "healthy" if comps is not None else "degraded",

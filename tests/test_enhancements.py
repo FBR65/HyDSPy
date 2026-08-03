@@ -10,8 +10,8 @@ from unittest.mock import MagicMock
 import pandas as pd
 import pytest
 
+from src.components.agentic_rag import AgenticRAG, AgenticState, AgenticTools
 from src.components.bm25_manager import BM25Manager
-from src.components.agentic_rag import AgenticRAG, AgenticTools, AgenticState
 from src.components.lancedb_manager import LanceDBManager
 
 # ---------------------------------------------------------------------------
@@ -261,6 +261,7 @@ def test_lifespan_starts_background_init():
     """The lifespan should start an asyncio task rather than blocking."""
     import asyncio
     from contextlib import asynccontextmanager
+
     from src.api import app as app_module
 
     state = MagicMock()

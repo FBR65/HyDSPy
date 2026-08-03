@@ -21,7 +21,8 @@ def test_env_var_substitution(monkeypatch, tmp_path):
     """${ENV_VAR} placeholders are replaced by os.environ values."""
     monkeypatch.setenv("MY_TEST_KEY", "sk-fake-123")
     yaml_path = tmp_path / "settings.yaml"
-    yaml_path.write_text(textwrap.dedent("""
+    yaml_path.write_text(
+        textwrap.dedent("""
             llm_configs:
               chunk_llm:
                 base_url: http://x
@@ -36,7 +37,8 @@ def test_env_var_substitution(monkeypatch, tmp_path):
               table_name: docs
             settings:
               chunk_size: 1000
-            """))
+            """)
+    )
     cfg = ConfigManager(config_path=str(yaml_path))
     assert cfg.get_llm_config("chunk_llm")["api_key"] == "sk-fake-123"
     assert cfg.get_embedding_config()["api_key"] == "sk-fake-123"
@@ -46,7 +48,8 @@ def test_missing_env_var_kept_as_placeholder(tmp_path):
     """When the env var is missing, the placeholder is left unchanged."""
     os.environ.pop("UNSET_TEST_KEY", None)
     yaml_path = tmp_path / "settings.yaml"
-    yaml_path.write_text(textwrap.dedent("""
+    yaml_path.write_text(
+        textwrap.dedent("""
             llm_configs:
               chunk_llm:
                 base_url: http://x
@@ -59,7 +62,8 @@ def test_missing_env_var_kept_as_placeholder(tmp_path):
             lancedb_config:
               uri: ./lancedb
               table_name: docs
-            """))
+            """)
+    )
     cfg = ConfigManager(config_path=str(yaml_path))
     assert cfg.get_llm_config("chunk_llm")["api_key"] == "${UNSET_TEST_KEY}"
 
@@ -67,12 +71,14 @@ def test_missing_env_var_kept_as_placeholder(tmp_path):
 def test_get_settings_default_when_missing(tmp_path):
     """Missing settings block yields sensible defaults."""
     yaml_path = tmp_path / "settings.yaml"
-    yaml_path.write_text(textwrap.dedent("""
+    yaml_path.write_text(
+        textwrap.dedent("""
             llm_configs:
               chunk_llm: {base_url: http://x, api_key: k, model_id: m}
             embedding_config: {base_url: http://x, api_key: k, model_id: e}
             lancedb_config: {uri: ./lancedb, table_name: docs}
-            """))
+            """)
+    )
     cfg = ConfigManager(config_path=str(yaml_path))
     assert cfg.get_settings() == {"chunk_size": 1000}
 
@@ -80,14 +86,16 @@ def test_get_settings_default_when_missing(tmp_path):
 def test_get_settings_override(tmp_path):
     """A present settings block is read correctly."""
     yaml_path = tmp_path / "settings.yaml"
-    yaml_path.write_text(textwrap.dedent("""
+    yaml_path.write_text(
+        textwrap.dedent("""
             llm_configs:
               chunk_llm: {base_url: http://x, api_key: k, model_id: m}
             embedding_config: {base_url: http://x, api_key: k, model_id: e}
             lancedb_config: {uri: ./lancedb, table_name: docs}
             settings:
               chunk_size: 500
-            """))
+            """)
+    )
     cfg = ConfigManager(config_path=str(yaml_path))
     assert cfg.get_settings() == {"chunk_size": 500}
 
@@ -95,12 +103,63 @@ def test_get_settings_override(tmp_path):
 def test_get_llm_config_unknown_raises(tmp_path):
     """An unknown LLM section raises KeyError."""
     yaml_path = tmp_path / "settings.yaml"
-    yaml_path.write_text(textwrap.dedent("""
+    yaml_path.write_text(
+        textwrap.dedent("""
             llm_configs:
               chunk_llm: {base_url: http://x, api_key: k, model_id: m}
             embedding_config: {base_url: http://x, api_key: k, model_id: e}
             lancedb_config: {uri: ./lancedb, table_name: docs}
-            """))
+            """)
+    )
     cfg = ConfigManager(config_path=str(yaml_path))
     with pytest.raises(KeyError):
         cfg.get_llm_config("nonexistent_llm")
+
+
+def test_env_var_substitution_in_lists(monkeypatch, tmp_path):
+    """${ENV_VAR} placeholders inside list items are replaced, proving the
+    recursive config manager handles lists (not just dicts)."""
+    monkeypatch.setenv("MY_LIST_KEY", "list-value-42")
+    yaml_path = tmp_path / "settings.yaml"
+    yaml_path.write_text(
+        textwrap.dedent("""
+            llm_configs:
+              chunk_llm:
+                base_url: http://x
+                api_key: k
+                model_id: m
+            embedding_config: {base_url: http://x, api_key: k, model_id: e}
+            lancedb_config: {uri: ./lancedb, table_name: docs}
+            settings:
+              chunk_size: 1000
+              extra_tags:
+                - "${MY_LIST_KEY}"
+                - "plain string"
+            """)
+    )
+    cfg = ConfigManager(config_path=str(yaml_path))
+    tags = cfg.get_settings()["extra_tags"]
+    assert tags == ["list-value-42", "plain string"]
+
+
+def test_env_var_substitution_in_nested_lists(monkeypatch, tmp_path):
+    """Nested list-of-lists with env vars are recursively substituted."""
+    monkeypatch.setenv("NESTED_KEY", "deep")
+    yaml_path = tmp_path / "settings.yaml"
+    yaml_path.write_text(
+        textwrap.dedent("""
+            llm_configs:
+              chunk_llm:
+                base_url: http://x
+                api_key: k
+                model_id: m
+            embedding_config: {base_url: http://x, api_key: k, model_id: e}
+            lancedb_config: {uri: ./lancedb, table_name: docs}
+            settings:
+              chunk_size: 1000
+              nested:
+                - ["${NESTED_KEY}", "static"]
+            """)
+    )
+    cfg = ConfigManager(config_path=str(yaml_path))
+    assert cfg.get_settings()["nested"] == [["deep", "static"]]

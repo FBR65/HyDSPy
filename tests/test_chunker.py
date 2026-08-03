@@ -3,7 +3,7 @@
 import pytest
 
 from src.components.chunker import SemanticChunker, _split_by_size, _split_words
-from tests.conftest import FakeLLM, ExplodingLLM
+from tests.conftest import ExplodingLLM, FakeLLM
 
 # --- deterministic mode (without LLM) ---
 
@@ -24,7 +24,7 @@ def test_short_text_returned_as_single_chunk():
 
 
 def test_paragraphs_joined_when_under_limit():
-    """Without LLM: adjacent paragraphs are concatenated as long as chunk_size allows."""
+    """Without LLM: paragraphs concatenated when they fit chunk_size."""
     chunker = SemanticChunker(chunk_size=1000)
     text = "Paragraph one.\n\nParagraph two.\n\nParagraph three."
     chunks = chunker.chunk(text)
@@ -51,7 +51,10 @@ def test_chunk_size_respected_for_long_paragraphs():
 
 def test_long_paragraph_with_sentences_is_split():
     chunker = SemanticChunker(chunk_size=50)
-    text = "First sentence. Second sentence. Third sentence with more text. Fourth sentence."
+    text = (
+        "First sentence. Second sentence. "
+        "Third sentence with more text. Fourth sentence."
+    )
     chunks = chunker.chunk(text)
     assert all(len(c) <= 50 for c in chunks)
     assert len(chunks) >= 2

@@ -1,5 +1,6 @@
-import sys
 import logging
+import sys
+
 from dotenv import load_dotenv
 
 from src.bootstrap import build  # noqa: E402
@@ -42,7 +43,7 @@ def main() -> int:
     )
     logger.info("Document processed. %d chunks created.", len(processed_chunks))
 
-    question = "How does HyDE work with DSPy?"
+    question = "How does HyDE work with DSPi?"
 
     logger.info("Answering question: %s", question)
     result = components.hyde_rag(question)

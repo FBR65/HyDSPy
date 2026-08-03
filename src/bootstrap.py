@@ -6,15 +6,15 @@ from typing import Optional
 import dspy
 from dotenv import load_dotenv
 
-from src.config.config_manager import ConfigManager
+from src.components.agentic_rag import AgenticRAG
+from src.components.bm25_manager import BM25Manager
 from src.components.chunker import SemanticChunker
 from src.components.document_processor import DocumentProcessor
 from src.components.embedding_manager import EmbeddingManager
 from src.components.hyde_rag import HyDERAG
 from src.components.lancedb_manager import LanceDBManager
 from src.components.llm_manager import LLMManager
-from src.components.bm25_manager import BM25Manager
-from src.components.agentic_rag import AgenticRAG
+from src.config.config_manager import ConfigManager
 
 logger = logging.getLogger(__name__)
 
@@ -30,7 +30,7 @@ class Components:
     document_processor: DocumentProcessor
     hyde_rag: HyDERAG
     bm25_manager: BM25Manager
-    agentic_rag: AgenticRAG
+    agentic_rag: Optional[AgenticRAG]
 
     @property
     def initialised(self) -> bool:
@@ -38,26 +38,21 @@ class Components:
 
         Note: ``build()`` is fail-loud — it raises on any initialisation
         failure rather than returning a partially-populated ``Components``.
-        Therefore this property is effectively always ``True`` for an instance
-        returned by ``build()``. It exists as a defensive guard for callers
-        that construct ``Components`` manually (e.g. tests) and want to assert
-        completeness without catching exceptions.
+        ``agentic_rag`` may be ``None`` when ``agentic_enabled`` is False;
+        that is a valid, intended state, not a failure.
         """
-        return all(
-            getattr(self, field) is not None
-            for field in (
-                "config_manager",
-                "chunk_llm_manager",
-                "answer_llm_manager",
-                "embedding_manager",
-                "db_manager",
-                "chunker",
-                "document_processor",
-                "hyde_rag",
-                "bm25_manager",
-                "agentic_rag",
-            )
+        required = (
+            "config_manager",
+            "chunk_llm_manager",
+            "answer_llm_manager",
+            "embedding_manager",
+            "db_manager",
+            "chunker",
+            "document_processor",
+            "hyde_rag",
+            "bm25_manager",
         )
+        return all(getattr(self, f) is not None for f in required)
 
 
 def _resolve_config_path(explicit: Optional[str] = None) -> str:
@@ -117,6 +112,7 @@ def build(config_path: Optional[str] = None, load_env: bool = True) -> Component
     expansion_weight = float(settings.get("expansion_weight", 0.5))
     df_threshold = float(settings.get("df_threshold", 0.1))
     max_calls = int(settings.get("max_calls", 15))
+    agentic_enabled = bool(settings.get("agentic_enabled", True))
     token_threshold = int(settings.get("token_threshold", 115_200))
     search_limit = int(settings.get("search_limit", 10))
     max_queries_per_call = int(settings.get("max_queries_per_call", 5))
@@ -180,16 +176,20 @@ def build(config_path: Optional[str] = None, load_env: bool = True) -> Component
         num_queries=num_queries,
         bm25_hybrid=bm25_hybrid,
     )
-    agentic_rag = AgenticRAG(
-        db_manager=db_manager,
-        embedding_manager=embedding_manager,
-        bm25_manager=bm25_manager,
-        max_calls=max_calls,
-        token_threshold=token_threshold,
-        search_limit=search_limit,
-        max_queries_per_call=max_queries_per_call,
-        open_window=open_window,
-    )
+    if agentic_enabled:
+        agentic_rag = AgenticRAG(
+            db_manager=db_manager,
+            embedding_manager=embedding_manager,
+            bm25_manager=bm25_manager,
+            max_calls=max_calls,
+            token_threshold=token_threshold,
+            search_limit=search_limit,
+            max_queries_per_call=max_queries_per_call,
+            open_window=open_window,
+        )
+    else:
+        agentic_rag = None
+        logger.info("Agentic RAG disabled (agentic_enabled=False).")
 
     return Components(
         config_manager=config_manager,

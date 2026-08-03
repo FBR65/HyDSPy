@@ -1,16 +1,18 @@
 import logging
-import dspy
 from typing import List, Optional, Tuple
 
-from .lancedb_manager import LanceDBManager
-from .embedding_manager import EmbeddingManager
+import dspy
+
 from .bm25_manager import BM25Manager
+from .embedding_manager import EmbeddingManager
+from .lancedb_manager import LanceDBManager
 
 logger = logging.getLogger(__name__)
 
 
 class GenerateHypotheticalDoc(dspy.Signature):
-    """Generates a detailed hypothetical answer to the question to support document retrieval."""
+    """Generates a detailed hypothetical answer to the question to support
+    document retrieval."""
 
     question = dspy.InputField()
     hypothetical_document = dspy.OutputField(
@@ -32,7 +34,8 @@ class GenerateQueries(dspy.Signature):
 
 
 class PredictTerms(dspy.Signature):
-    """Predicts terms that are likely to appear verbatim in the answer document but NOT in the query.
+    """Predicts terms likely to appear verbatim in the answer document but
+    NOT in the query.
 
     This is SIRA-style query-side term prediction: think of concrete identifiers,
     error codes, version numbers, product names, or technical terms the answer

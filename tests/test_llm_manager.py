@@ -9,7 +9,7 @@ from src.components.llm_manager import LLMManager
 class _FakeChoice:
     def __init__(self, text=None, content=None):
         self.text = text
-        self.message = _FakeMessage(content) if content is not None else None
+        self.message = _FakeMessage(content)
 
 
 class _FakeMessage:
@@ -117,3 +117,20 @@ def test_generate_completion_custom_max_tokens(monkeypatch):
     monkeypatch.setattr(lm, "client", fake)
     lm.generate_completion("hi", max_tokens=100)
     assert fake.chat_calls[0]["max_tokens"] == 100
+
+
+def test_generate_completion_none_content_returns_empty(monkeypatch):
+    """When the model returns content=None, the method must not crash on
+    .strip() and must return an empty string."""
+    fake = _FakeClient(chat_content=None)
+    lm = LLMManager("http://x", "k", "m")
+    monkeypatch.setattr(lm, "client", fake)
+    assert lm.generate_completion("hi") == ""
+
+
+def test_generate_chat_none_content_returns_empty(monkeypatch):
+    """When chat content is None, generate_chat_completion must not crash."""
+    fake = _FakeClient(chat_content=None)
+    lm = LLMManager("http://x", "k", "m")
+    monkeypatch.setattr(lm, "client", fake)
+    assert lm.generate_chat_completion([{"role": "user", "content": "hi"}]) == ""

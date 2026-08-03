@@ -1,4 +1,6 @@
 import logging
+from typing import List
+
 from openai import OpenAI
 
 logger = logging.getLogger(__name__)
@@ -37,13 +39,16 @@ class LLMManager:
                 messages=[{"role": "user", "content": prompt}],
                 max_tokens=max_tokens,
             )
-            return (response.choices[0].message.content or "").strip()
+            content = response.choices[0].message.content
+            return (content or "").strip()
         except Exception as e:
             raise RuntimeError(
                 f"LLM completion for model '{self.model_id}' failed: {e}"
             ) from e
 
-    def generate_chat_completion(self, messages: list, max_tokens: int = 500) -> str:
+    def generate_chat_completion(
+        self, messages: List[dict], max_tokens: int = 500
+    ) -> str:
         """
         Generates a chat completion for a list of messages.
 
@@ -56,7 +61,8 @@ class LLMManager:
             response = self.client.chat.completions.create(
                 model=self.model_id, messages=messages, max_tokens=max_tokens
             )
-            return response.choices[0].message.content.strip()
+            content = response.choices[0].message.content
+            return (content or "").strip()
         except Exception as e:
             raise RuntimeError(
                 f"LLM chat completion for model '{self.model_id}' failed: {e}"
